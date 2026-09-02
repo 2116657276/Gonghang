@@ -1,0 +1,14 @@
+# 当前阶段仅提交 Markdown 文档，其他文件默认忽略。
+*
+
+# 允许 Git 进入文档所在目录，并放行 Markdown 文档。
+!*/
+!*.md
+!*.markdown
+
+# 依赖目录中的 README 不属于项目文档。
+**/node_modules/
+**/.pnpm-store/
+
+# .gitignore 本身需要纳入版本管理。
+!.gitignore
