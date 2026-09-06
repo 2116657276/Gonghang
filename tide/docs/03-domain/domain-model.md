@@ -1,108 +1,51 @@
-# 领域模型
+# 潮汐·创证领域模型
 
-| 元信息 | 内容 |
-| --- | --- |
-| 文档版本 | 0.2.0 |
-| 文档状态 | 已实现领域基线 |
-| 负责人 | 领域负责人 |
-| 更新时间 | 2026-09-02 |
-| 关联文档 | [双时钟规则](dual-clock-rules.md)、[证据护照](evidence-passport.md)、[沙盘](scenario-simulation.md)、[数据模型](../04-architecture/data-model.md) |
+> 文档状态：历史研究分支。本文实体和聚合面向科创双证据方案，当前小微借贷周期的领域模型待重建。
 
-## 1. 聚合边界
+## 一、聚合边界
 
-`RiskCaseSnapshot` 是一次计算的不可变输入快照，包含案例上下文、参考日、业务警戒线、回款节点、周转保障节点、运行时证据和证据关联。规则引擎不读取外部状态，不写审计记录；服务层未来负责持久化、权限和事件记录。
-
-| 实体/值对象 | 责任 | 关键约束 |
+| 聚合 | 关键实体 | 主要职责 |
 | --- | --- | --- |
-| `RiskCaseSnapshot` | 聚合一次正式或模拟计算所需数据。 | `caseId` 稳定；参考日和警戒线为合法日期。 |
-| `CashflowNode` | 表达预计回款可用区间和覆盖比例。 | 每个案例恰有一个主节点；比例范围 0–100 且下界不大于上界。 |
-| `SafeguardNode` | 表达周转保障预计具备人工确认条件的区间。 | 每个案例恰有一个主节点；类型来自固定枚举。 |
-| `EvidenceItem` | 表达运行时证据护照。 | 阶段、状态、用途、来源和可见角色必填。 |
-| `EvidenceLink` | 建立节点与证据多对多关联。 | 引用必须存在且节点类型匹配。 |
-| `RiskExplanation` | 输出规则状态、差值、准备度、置信度、原因、缺口和任务。 | 不含授信结论和违约概率。 |
-| `VerificationTask` | 将证据缺口与压力状态转为责任动作。 | 有依据、角色、优先级；完成不自动改状态。 |
-| `ManualOverride` | 保存规则结果上的人工判断。 | 理由必填；原解释不可覆盖。 |
-| `Authorization` | 控制协同摘要用途、范围和期限。 | 撤回即时阻断后续导出。 |
-| `AuditEvent` | 记录关键行为。 | 追加式、不可静默删除或改写。 |
+| 项目空间 `ProjectSpace` | 企业主体、产品、保护日、授权 | 隔离数据并限定处理目的 |
+| 材料库 `EvidenceStore` | 附件、来源定位、版本、哈希摘要 | 保存材料来源和变更历史 |
+| 事实账本 `FactLedger` | 候选事实、核验状态、冲突、复核 | 区分机器结果与核验结果 |
+| 双证据图 `DualEvidenceGraph` | 研发节点、订单节点、跨链关系 | 表达过程、断点和映射关系 |
+| 双时钟 `DualClock` | 资金区间、就绪区间、依据 | 解释时间窗口而非预测审批 |
+| 证据护照 `EvidencePassport` | 脱敏快照、共享范围、未解决事项 | 形成可追溯交付物 |
 
-## 2. 关系图
+## 二、核心实体
 
-```mermaid
-classDiagram
-    class RiskCaseSnapshot {
-      +caseId: string
-      +scenarioProfile: string
-      +industry: string
-      +purposeCategory: string
-      +referenceDate: ISODate
-      +guardDate: ISODate
-    }
-    class CashflowNode {
-      +nodeId: string
-      +expectedAvailableDateRange: DateRange
-      +coveragePercentRange: CoveragePercentRange
-      +verificationStatus: EvidenceStatus
-      +isPrimary: boolean
-    }
-    class SafeguardNode {
-      +nodeId: string
-      +safeguardType: SafeguardType
-      +expectedReadyDateRange: DateRange
-      +verificationStatus: EvidenceStatus
-      +isPrimary: boolean
-    }
-    class EvidenceItem {
-      +evidenceId: string
-      +sourceType: CaseEvidenceSourceType
-      +stage: EvidenceStage
-      +status: EvidenceStatus
-      +purpose: EvidencePurpose
-      +validFrom: ISODate
-      +expiresAt: ISODate
-    }
-    class EvidenceLink {
-      +nodeId: string
-      +nodeType: NodeType
-      +evidenceId: string
-    }
-    class RiskExplanation {
-      +calculatedStatus: RiskStatus
-      +deltaCashRange: DayDeltaRange
-      +deltaSafeguardRange: DayDeltaRange
-      +cashEvidenceReadiness: EvidenceReadiness
-      +safeguardEvidenceReadiness: EvidenceReadiness
-      +confidenceLevel: ConfidenceLevel
-    }
-    RiskCaseSnapshot "1" *-- "0..*" CashflowNode
-    RiskCaseSnapshot "1" *-- "0..*" SafeguardNode
-    RiskCaseSnapshot "1" *-- "0..*" EvidenceItem
-    RiskCaseSnapshot "1" *-- "0..*" EvidenceLink
-    EvidenceLink --> CashflowNode
-    EvidenceLink --> SafeguardNode
-    EvidenceLink --> EvidenceItem
-    RiskCaseSnapshot --> RiskExplanation : calculateRisk
-```
+### 2.1 事实 `EvidenceFact`
 
-## 3. 节点类型
+| 字段 | 含义 |
+| --- | --- |
+| `factId` | 匿名事实标识 |
+| `factType` | 主体、产品、版本、订单、金额、日期或状态 |
+| `value` | 当前结构化值 |
+| `sourceRef` | 文件、页码、区域或字段定位 |
+| `extractionMethod` | 人工录入、规则提取或模型提取 |
+| `status` | `CANDIDATE/CONFLICT/PENDING_REVIEW/VERIFIED/REJECTED/EXPIRED` |
+| `confidence` | 仅表示提取置信，不表示事实真实性 |
+| `version` | 当前版本号 |
 
-`SafeguardType` 只允许：`MATERIAL_READINESS`、`ALTERNATIVE_OPERATING_ARRANGEMENT`、`THIRD_PARTY_SUPPORT_INFORMATION`、`OTHER`。这些类型表达“能否形成可供人工确认的信息或安排”，不表达金融产品状态。
+### 2.2 证据节点 `EvidenceNode`
 
-回款覆盖比例使用 `{ minPercent, maxPercent }`，避免把“60%–80%”作为无法验证的展示字符串。日期一律使用闭区间 `{ start, end }`；单日表示为起止相同。
+节点分为 `TECH_MILESTONE`、`ORDER_REALIZATION` 两组。节点至少包含类型、对象、时间区间、关联事实、上游依赖、核验状态和责任人。
 
-## 4. 运行时证据与竞赛证据分离
+### 2.3 跨链关系 `CrossChainLink`
 
-运行时 `CaseEvidenceSourceType` 仅允许模拟文档、模拟系统事件、经同意脱敏事实和人工复核记录。公开政策、行业报告、访谈可信等级和专业反馈只存在竞赛证据台账，不得被链接到案例节点或提升置信等级。
+跨链关系描述某项研发里程碑与产品版本、订单或交付之间的可解释映射。关系本身也必须有来源和状态，不允许因名称相似自动确认为已核验。
 
-## 5. 规则状态与有效状态
+## 三、领域不变量
 
-领域函数计算 `calculatedStatus`。未来服务层持久化时，案例还需同时保存 `ruleStatus` 与 `effectiveStatus`：无人工覆盖时二者一致；有人工覆盖时有效状态可以不同，但原规则状态、差值和解释仍可见。人工覆盖不能回写历史快照。
+1. 已核验事实必须存在有效来源或具名人工复核记录。
+2. 候选事实不得直接写入证据护照的“已核验”分区。
+3. 合同签署、开票、验收和资金可用必须是不同事件。
+4. 时间冲突不得通过自动改写原始日期消除。
+5. 双时钟缺少依据时必须返回无法估计或扩大区间。
+6. 共享快照生成后，其版本和授权范围不可被静默修改。
+7. 任一自动规则均不能产生授信通过、额度或利率结论。
 
-## 6. 不变量
+## 四、模型解释边界
 
-- 每类节点恰有一个主节点，否则待核验。
-- 参考日合法，警戒线不早于参考日；非法输入返回错误。
-- 日期区间起日不晚于止日；覆盖比例满足范围约束。
-- 当前证据不能是拒绝或过期状态，也不能尚未生效或已超过有效期。
-- 状态只由日期规则产生；证据不直接把承压状态改为稳态。
-- 提取候选不属于 `EvidenceItem`；只有接受后才形成待核验证据草稿。
-- 沙盘以深拷贝运行，不修改输入对象。
+领域模型只表达研发里程碑、订单兑现、材料就绪、来源、状态与人工复核关系。任何“信用分”“技术价值分”“获批概率”或“建议额度”均不属于本模型，也不得由现有字段间接推导。

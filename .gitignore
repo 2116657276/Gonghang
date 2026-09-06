@@ -1,14 +1,47 @@
-# 当前阶段仅提交 Markdown 文档，其他文件默认忽略。
-*
+# 依赖与构建产物
+node_modules/
+.pnpm-store/
+dist/
+build/
+coverage/
+*.tsbuildinfo
+.vite/
 
-# 允许 Git 进入文档所在目录，并放行 Markdown 文档。
-!*/
-!*.md
-!*.markdown
+# 本地配置与凭据（示例文件可以提交）
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+secrets/
+credentials/
 
-# 依赖目录中的 README 不属于项目文档。
-**/node_modules/
-**/.pnpm-store/
+# 本地数据、导出与日志
+*.sqlite
+*.sqlite3
+*.db
+*.dump
+*.sql.gz
+*.xlsx
+*.xls
+*.log
+logs/
+npm-debug.log*
+pnpm-debug.log*
 
-# .gitignore 本身需要纳入版本管理。
-!.gitignore
+# 编辑器与操作系统文件
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+
+# 临时缓存
+.cache/
+.tmp/
+tmp/

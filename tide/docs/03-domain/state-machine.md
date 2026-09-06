@@ -1,78 +1,36 @@
-# 状态机与人工闭环
+# 潮汐·创证状态机
 
-| 元信息 | 内容 |
-| --- | --- |
-| 文档版本 | 0.2.0 |
-| 文档状态 | 已实现规则状态，持久化闭环待开发 |
-| 负责人 | 领域负责人、风险规则负责人 |
-| 更新时间 | 2026-09-02 |
-| 关联文档 | [双时钟规则](dual-clock-rules.md)、[证据护照](evidence-passport.md)、[用户流程](../02-product/user-flows.md) |
+> 文档状态：历史研究分支。本文状态仅适用于科创双证据研究对象，不能直接作为当前小微借贷周期的状态机。
 
-## 1. 规则状态机
+## 一、事实状态机
 
-规则状态不是由事件直接“推进”，而是在每次输入变化后重新计算。下图描述可观察的变化，不代表任务完成自动切换状态。
+`CANDIDATE → PENDING_REVIEW → VERIFIED`
 
-```mermaid
-stateDiagram-v2
-    [*] --> PENDING_VERIFICATION
-    PENDING_VERIFICATION --> STEADY: 主节点、有效日期和当前证据齐备，两个区间均不晚于警戒线
-    PENDING_VERIFICATION --> CASH_PRESSURE: 回款区间晚于警戒线
-    PENDING_VERIFICATION --> SAFEGUARD_PRESSURE: 周转保障区间晚于警戒线
-    PENDING_VERIFICATION --> DUAL_PRESSURE: 两个区间均晚于警戒线
-    STEADY --> CASH_PRESSURE: 回款日期重算后滞后
-    STEADY --> SAFEGUARD_PRESSURE: 周转保障日期重算后滞后
-    CASH_PRESSURE --> DUAL_PRESSURE: 周转保障也滞后
-    SAFEGUARD_PRESSURE --> DUAL_PRESSURE: 回款也滞后
-    DUAL_PRESSURE --> CASH_PRESSURE: 周转保障区间不再滞后
-    DUAL_PRESSURE --> SAFEGUARD_PRESSURE: 回款区间不再滞后
-    CASH_PRESSURE --> STEADY: 回款区间不再滞后
-    SAFEGUARD_PRESSURE --> STEADY: 周转保障区间不再滞后
-    STEADY --> PENDING_VERIFICATION: 证据失效、节点不唯一或区间跨线
-    CASH_PRESSURE --> PENDING_VERIFICATION: 同上
-    SAFEGUARD_PRESSURE --> PENDING_VERIFICATION: 同上
-    DUAL_PRESSURE --> PENDING_VERIFICATION: 同上
-```
+候选事实在规则冲突时进入 `CONFLICT`，在人工否定时进入 `REJECTED`，在来源或授权失效时进入 `EXPIRED`。`CONFLICT` 只能经补充来源或人工复核转为 `PENDING_REVIEW/VERIFIED/REJECTED`，不得由模型自动消除。
 
-## 2. 触发重算的正式事件
-
-- 主回款或主周转保障日期区间经权限校验后改变。
-- 证据被人工核验、拒绝、标记过期或有效期变化。
-- 业务警戒线经授权流程正式改变。
-- 主节点选择变化或证据关联被修复。
-
-打开页面、完成任务、查看沙盘或接受提取候选本身都不触发正式状态改变；接受候选只创建待核验证据，后续人工核验才可能触发重算。
-
-## 3. 规则状态与人工覆盖
-
-```mermaid
-flowchart TD
-    A[正式输入快照] --> B[确定性规则计算]
-    B --> C[规则状态与原解释]
-    C --> D{是否需要人工覆盖?}
-    D -->|否| E[有效状态等于规则状态]
-    D -->|是| F[权限检查和理由必填]
-    F --> G[保存覆盖状态、理由、操作者与时间]
-    G --> H[有效状态可不同，原解释仍可见]
-    E --> I[追加审计事件]
-    H --> I
-```
-
-人工覆盖不得修改 `calculatedStatus`、日期差或历史原因。新的正式输入产生新计算后，应提示复核人员重新确认覆盖是否仍适用。
-
-## 4. 任务生命周期
-
-任务状态为 `OPEN`、`IN_PROGRESS`、`COMPLETED`、`CANCELLED`。规则引擎生成的是建议任务；服务层持久化时需要用案例、任务类型和业务键避免重复创建。任务完成表示责任动作完成，不证明证据通过，也不把案例自动改为稳态。
-
-## 5. 状态动作基线
-
-| 状态 | 主要动作 | 优先级 |
+| 当前状态 | 允许转入 | 必要条件 |
 | --- | --- | --- |
-| `STEADY` | 巡检证据有效期与下次复核时间。 | 低 |
-| `CASH_PRESSURE` | 核验履约、结算和到账可用性，提交回款人工复核。 | 高 |
-| `SAFEGUARD_PRESSURE` | 补齐保障准备与人工确认，提交保障人工复核。 | 高 |
-| `DUAL_PRESSURE` | 同时处理两链，执行高优先级人工复核。 | 严重 |
-| `PENDING_VERIFICATION` | 只针对实际缺口补证并复核关键时间。 | 高 |
+| `CANDIDATE` | `PENDING_REVIEW/CONFLICT/REJECTED` | 完成来源定位及规则校验 |
+| `CONFLICT` | `PENDING_REVIEW/REJECTED` | 保留冲突双方来源并提交处理意见 |
+| `PENDING_REVIEW` | `VERIFIED/CONFLICT/REJECTED` | 具名复核者提交依据 |
+| `VERIFIED` | `EXPIRED/CONFLICT` | 来源失效或新证据形成冲突 |
+| `REJECTED` | `CANDIDATE` | 出现新版本材料并重新提取 |
+| `EXPIRED` | `CANDIDATE` | 更新授权或来源后重新核验 |
 
-## 6. 审计要求
+## 二、项目窗口状态机
 
-每次正式计算、证据状态变化、任务状态变化、人工覆盖、授权变化、导出成功或失败均形成追加式事件。事件记录对象标识、动作、前后状态、操作者角色、时间和最小必要原因，不写原始材料和敏感摘录。
+项目窗口状态为 `PENDING_VERIFICATION`、`STEADY`、`CASH_PRESSURE`、`READINESS_PRESSURE` 或 `DUAL_PRESSURE`。状态仅由双时钟依据和保护日比较产生，不允许人工直接选择“稳态”。
+
+### 状态优先级
+
+1. 缺少关键依据时优先进入 `PENDING_VERIFICATION`。
+2. 依据完整后分别判断资金基准区间和就绪基准区间是否晚于保护日。
+3. 任一区间跨越保护日时，必须增加不确定性提示，即使基准日期未越界。
+
+## 三、事件与幂等
+
+每次材料上传、字段纠正、规则校验、人工复核、授权变化和时钟重算均形成事件。事件至少包含 `eventId`、`aggregateId`、`eventType`、`actorRole`、`occurredAt`、`inputVersion`、`ruleVersion` 和 `idempotencyKey`。重复事件不能造成重复节点、重复复核或护照版本跳跃。
+
+## 四、失败状态
+
+外部服务超时、文件损坏、来源定位失败和权限不足不得转换为业务已完成状态。界面应显示具体失败、保留已成功步骤，并允许重试或转人工。
