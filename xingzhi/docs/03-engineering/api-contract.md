@@ -3,45 +3,84 @@
 | 字段 | 内容 |
 | --- | --- |
 | 文档编号 | XZ-API |
-| 更新日期 | 2026-09-06 |
-| 状态 | P0 业务语义已冻结；并非已部署 API 或完整 OpenAPI 规范 |
+| 更新日期 | 2026-09-11 |
+| 状态 | 2026-09-11 恢复开发；009、010 已应用本机 `xingzhi_dev`，服务端与 Web 类型检查已通过，局部行为验证已通过，另有一条受控 Pi 链待补；当前仍不构成 S4／S5 放行，详见[验证策略第十三节](../04-quality/verification.md)与[开发计划 1.8](development-plan.md) |
 
 ## 一、公共约定
 
-下表是 P0 冻结的业务接口目录，不是支付宝接口。身份取自服务端会话上下文，所有对象按消费者、测试商户管理员、只读审核者和环境检查归属。写请求携带幂等键及必要的 expectedVersion；服务端计算金额，客户端只提交选择和确认范围。相同键同参数返回同一业务结果，不同参数返回冲突。
+下表是 P0 冻结的业务接口目录，不是支付宝接口。身份取自服务端会话上下文，业务对象按消费者、测试商户管理员或只读审核者的权限范围，以及服务端配置的环境归属进行校验。写请求携带幂等键及必要的 expectedVersion；服务端计算金额，客户端只提交选择和确认范围。相同键同参数返回同一业务结果，不同参数返回冲突。
 
-金额内部整数分，币种单独保存；时间持久化为统一时区时间戳，显示时带时区。读取响应含对象标识、业务状态、来源、observedAt、version、未决事项；异步写入返回 operationId 和受理状态，不以 HTTP 成功表示支付或退款成功。P0 写接口统一接收 `Idempotency-Key`，对既有对象的写入接收 `expectedVersion`；确认响应返回 confirmationId 与新授权标识；支付与退款相关请求和回调都携带环境、内部业务编号与关联订单。字段长度、分页上限和会话提供者由实际框架实现，但不得改变这些语义。
+金额内部整数分，币种单独保存；时间持久化为 UTC 时间戳，显示时带时区。业务读取响应含对象标识、业务状态、来源、observedAt、version、未决事项；异步写入返回 operationId 和受理状态，不以 HTTP 成功表示支付或退款成功。业务写接口接收 `Idempotency-Key`，对既有对象的写入接收 `expectedVersion`；确认响应返回 confirmationId 与新授权标识。登录、退出及渠道通知分别采用会话和渠道协议，不强加业务版本或幂等请求头。支付与退款内部记录必须带环境、内部业务编号和关联订单；渠道原生回调由验签、应用及订单映射解析环境，不要求渠道增加本项目自定义字段。
+
+下列路径是 P0 实现基线，统一加 `/api` 前缀；渠道通知也在该前缀下。列表默认 20 条、最多 100 条，事件使用游标。身份由服务端会话决定，环境由服务端配置和对象归属决定。GET 只读取已持久化事实；沙箱付款的主动查单使用 API-06R，其他既有交易复核使用 API-25，由后台合并调度。用户不能通过刷新页面绕过查询授权或渠道限频。
+
+### 1.1 契约与当前实现差异
+
+本文件描述目标契约，不表示列出的接口均已达到完整 P0 放行。开发前静态核对曾发现 API-06R 调用前缺少合并／限频、API-25 只有人工任务、API-12 未按环境分派，API-22 也只有模拟执行；这些观察已由本轮修正，不再作为当前实现状态。
+
+当前实现已按对象环境分派 API-12；API-22 在配置就绪时创建沙箱固定退款批次并由渠道 worker 按原号查询；API-06R 在访问渠道前复用缓存并限制同单 15 秒查询时隙，等待时返回 202；API-25 返回 `recheckOperationId`，沙箱任务由 worker 执行前复核授权，模拟对象仍转人工任务。交易工具、确认事件恢复和页面衔接已随 009、010 接入，局部行为和类型检查结果见验证策略第十三节；全部官方渠道实测仍未完成。
+
+### 1.2 共用业务入口与请求生命周期
+
+UI 经 HTTP、Agent 经受控工具进入同一业务服务。服务端传入已认证主体、角色、对象范围、用途和运行关联；模型参数不能填充这些可信字段。业务服务负责权限和事务，不要求工具持有浏览器 Cookie，也不允许工具直接调用确认或商户专属动作。共享契约包只定义必要输入／输出和字段校验，不暴露内部 SQL 或秘密渠道响应。
+
+写请求在准入前检查幂等键；同键同参数复用原结果，不同参数拒绝。不同键但属于同一确认项、同一取消事项或同一退款批次时，仍由业务唯一约束去重。页面双击、HTTP 重试、工具重试与事件恢复均不能生成替代业务号。字段错误和版本冲突在对外发送前返回；已经受理的未知结果返回原操作与当前事实，不把未知包装为可任意重试的 500 错误。
+
+API-06R 应在访问渠道前复用已有请求或合并同一订单的在途查询，并执行渠道限频。它仍可返回本次核验结果；等待时页面读取既有事实，不通过自动刷新重复 POST。API-25 必须返回原 operationId 及人工任务或后台核验状态，受理不代表已经访问渠道，更不代表已核验成功。查询结果无论来自页面、worker 或通知，均复用同一证据校验与状态归并逻辑。
+
+API-06R 是消费者触发本人付款核验的专属入口，按订单归属与支付状态检查，不要求先取得善后查询授权；API-25 对消费者检查有效查询授权，对商户检查自身订单和处理职责。T10 默认读持久快照；需要显式复核时走 API-25 对应业务权限，不能借 T10 绕过 API-06R 的调用主体限制。
 
 ## 二、用户与 Agent 共用业务能力
 
-| 接口标识 | 候选方法与路径 | 主要输入／输出 | 权限与幂等 |
+| 接口标识 | 方法与路径（省略 /api） | 主要输入／输出 | 权限与幂等 |
 | --- | --- | --- | --- |
 | API-01 | GET /catalog | 商品过滤 → 商品、报价与规则引用 | T01；只读 |
 | API-02 | POST /plans | 需求与计划项 → planId | 用户上下文；幂等 |
-| API-03 | POST /plans/{id}/purchase-proposals | 商品、数量 → 方案、金额、版本、有效期 | T04；只写草稿 |
-| API-04 | POST /purchase-proposals/{id}/confirm | 版本、明确接受范围 → confirmationId、purchaseAuthorizationId | 仅消费者；创建不可变购买授权；Agent 无调用权限 |
-| API-05 | POST /orders | 确认方案 → orderId、operationId | T05；重查授权、报价、占用 |
+| API-03 | POST /plans/{id}/purchase-proposals | 当前计划项 itemIds → 方案、金额、版本、有效期 | T04；只写草稿 |
+| API-04 | POST /purchase-proposals/{id}/confirm | 版本、明确接受范围、计划总上限、恢复范围 → confirmationId、purchaseAuthorizationId、`agentFollowupQueued` | 仅消费者；新授权保留计划历史账本；Agent 无调用权限；标记仅表示本次确认事务实际已入队 |
+| API-05 | POST /orders | 确认方案、计划项 → orderId、operationId | T05；原子重查授权、报价与计划预算，创建订单即占用；确认项不得重复建单 |
 | API-06 | POST /orders/{id}/payment-handoffs | 已确认订单 → 受控付款入口、有效期 | T06；不任意生成新支付订单 |
-| API-07 | POST /plans/{id}/pause | 节点范围、请求依据 → purchaseAuthorizationVersion、生效范围及在途清单 | 用户按钮或经校验 T07；只暂停购买授权；幂等 |
+| API-06R | POST /orders/{id}/payment-rechecks | 已创建且处于待付款／结果未知的沙箱订单 → 订单号、金额、交易状态及渠道返回卖家标识的主动核验结果 | 仅消费者；幂等；沙箱配置齐全且切换到 `sandbox` 模式后本机可用，不依赖 `notify_url`；身份或金额不匹配、以及无法判定的渠道错误进入 UNKNOWN；`ACQ.TRADE_NOT_EXIST` 保持待付款；不新建支付订单 |
+| API-07 | POST /plans/{id}/pause | 节点范围、请求依据 → planVersion、受影响购买授权版本、生效范围及在途清单 | 用户按钮或经校验 T07；原子更新计划暂停范围与购买授权，不影响善后／查询；幂等 |
 | API-08 | GET /plans/{id}/orders | 计划 → 有权查看的交易快照 | T02；只读 |
 | API-09 | GET /orders/{id}/cancellation-quote | 订单 → 费用、可退金额、规则版本 | T03；不产生退款 |
-| API-10 | POST /plans/{id}/change-proposals | 保留与取消意图 → 结构化变更方案 | T08；服务端重算 |
-| API-11 | POST /change-proposals/{id}/confirm | 版本、费用接受 → confirmationId、aftercareAuthorizationId | 仅消费者；创建订单范围内善后授权；重复同意不重复执行 |
-| API-12 | POST /change-proposals/{id}/execute | 已确认方案 → 逐项 operationId | T09；逐订单检查，不提供任意退款金额 |
-| API-13 | GET /operations/{id} | 操作 → 状态、证据时间和责任 | T10；遵守有效的查询／善后授权 |
+| API-10 | POST /plans/{id}/change-proposals | 计划项／已有订单范围、保留与取消意图 → 结构化变更方案 | T08；服务端重算；无订单计划项只停止，不伪造订单 |
+| API-11 | POST /change-proposals/{id}/confirm | 版本、费用和退款总额接受、分别展示的善后与查询范围／期限 → confirmationId、aftercareAuthorizationId、queryAuthorizationId、`agentFollowupQueued` | 仅消费者；分别建授权，默认各 7 天；重复同意不重复执行；标记仅表示本次确认事务实际已入队 |
+| API-12 | POST /change-proposals/{id}/execute | 已确认方案 → 逐项 operationId | T09；逐计划项／订单检查，无订单项仅停止，不提供任意退款金额 |
+| API-13 | GET /operations/{id} | 操作 → 已知状态、证据时间、跟踪权限和责任 | T10；消费者按本人归属读取，审核者按已分配计划只读且结果脱敏；到期后可读既有事实，不触发渠道查询 |
 | API-14 | GET /plans/{id}/events | 事件游标 → 脱敏事件与下一游标 | 用户或只读审核者 |
-| API-15 | POST /plans/{id}/evidence-exports | 字段范围 → 受控导出引用 | 检查分享范围；不含秘密 |
+| API-15 | POST /plans/{id}/evidence-exports | 格式（JSON／HTML）与字段范围 → 受控导出引用 | 消费者本人或审核范围；不含秘密；24 小时有效 |
 | API-16 | POST /plans/{id}/aftercare-query-revocations | 撤回范围、原因 → 撤回版本、停止项及官方查询入口 | 仅消费者；停止新增受托查询，不删除既有事实或商户对账职责 |
+| API-17 | POST /plans/{id}/query-authorizations | 既有订单范围、展示并接受的截止时间 → confirmationId、queryAuthorizationId | 仅消费者；只续期查询，不重新取消或退款；默认 7 天 |
+| API-18 | GET /plans；GET /plans/{id} | 计划列表／工作台快照 → 计划项、预算、授权、方案、订单与未决事项 | 对象归属；列表分页，详情恢复页面状态 |
 
-## 三、测试商户与渠道入口
+API-04／API-11 只保存确认、授权和事件，不直接执行外部交易。API-05／API-12 负责受控业务准入并持久化执行任务；用户确认后的 UI 或 Agent 可调用，双重调用由确认项唯一约束及幂等保证不重复。善后续期仍走 API-10／API-11，方案只包含尚未受理且仍需授权的动作。
+
+## 三、身份、商户和 Agent 配套接口
+
+| 接口标识 | 方法与路径（省略 /api） | 输入／输出与权限 |
+| --- | --- | --- |
+| API-19 | POST /sessions；GET /session；DELETE /session | 本地测试账号登录、当前身份、退出；账号角色存于服务端，退出使会话失效 |
+| API-20 | GET /merchant/catalog；PUT /merchant/catalog/{id}/rule | 商户查看目录、更新测试规则及版本；已确认订单保留规则快照，规则更新使受影响未执行预览重新校验 |
+| API-21 | GET /merchant/orders；GET /merchant/cancellations；POST /merchant/cancellations/{id}/decisions | 本商户订单及取消队列；按规则受理、批准、拒绝或延迟，返回原因、取消状态与 operationId |
+| API-22 | GET /merchant/cancellations/{id}/refund-batches；POST /merchant/cancellations/{id}/refund-batches | 商户查看／执行规则规定的退款安排；校验已批准取消、用户接受总额和批次，Agent／消费者不能调用；重复安排返回既有批次 |
+| API-23 | GET /merchant/manual-tasks；POST /merchant/manual-tasks/{id}/actions | 人工任务及责任、下一步、复核时间；只允许领取、按原请求复核／重试、记录外部处理说明，不提供手改资金成功入口 |
+| API-24 | POST /plans/{id}/agent-runs；GET /agent-runs/{id}；POST /agent-runs/{id}/cancel | 消费者输入与事件恢复运行、读取输出和停止推理；同计划仅一个活动决策循环；调用固定 Pi v0.85.1 + DeepSeek `deepseek-v4-flash`，受每分钟 10 次／突发 2、同计划并发 1、每轮 8 次模型调用／20 次工具调用／120 秒和累计 ¥100 费用账本约束；取消不撤销已受理业务操作 |
+| API-25 | POST /operations/{id}/rechecks | 请求复核既有交易；消费者／Agent 须有有效查询授权，商户须有本商户交易职责；记录主体与用途并合并待查任务 |
+| API-26 | POST /payments/alipay/notify | 渠道通知；不使用用户会话，依据渠道签名、应用、卖家、订单、金额和去重判断 |
+| API-27 | GET /evidence-exports/{id} | 复核用户归属／审核范围后下载已生成的 HTML／JSON；过期返回明确错误并需重新申请 |
+
+只读审核者通过 API-18、API-13、API-14 查看服务端配置的审核计划范围，并通过 API-15 导出脱敏材料；创建导出不授予业务写权限。用户端操作不得借商户 API 绕过授权。测试规则采用命名预设：全退、收取 80 元费用、分两次各退 400 元、拒绝、延迟；不在 P0 建通用规则编程器。
+
+## 四、测试商户与渠道入口
 
 商户模块提供商品查询、创建订单、受理取消、审核取消、执行退款和查询处理结果。消费者只能向订单所属商户提交申请；内部退款执行入口不公开给 Agent，也不允许前端声明商户角色后调用。商户自动批准仅适用于已配置且满足的测试规则。
 
-支付通知入口独立于用户接口，保留原始签名所需请求格式；完成验签、应用／卖家／订单／金额及允许状态核对、持久化去重后，按渠道协议应答。未知对象先隔离核查，不凭通知临时创建任意用户订单。
+支付通知入口独立于用户接口，保留原始签名所需请求格式；当配置了 `notify_url` 时，完成验签、应用／卖家／订单／金额及允许状态核对、持久化去重后，按渠道协议应答。未配置通知地址的本机沙箱流程使用 API-06R 主动查单；两条路径都不能凭渠道结果临时创建任意用户订单。
 
-## 四、支付宝适配范围
+## 五、支付宝适配范围
 
-| 能力 | 拟用接口 | 必须验证的判据 |
+| 能力 | 使用接口 | 必须验证的判据 |
 | --- | --- | --- |
 | 网页付款 | alipay.trade.page.pay | 只生成付款交接；是否形成渠道订单需查询，不能即刻标记成功 |
 | 交易查询 | alipay.trade.query | 核对订单、金额和交易状态；保留历史付款事实 |
@@ -49,11 +88,13 @@
 | 商户退款 | alipay.trade.refund | 原单、固定 out_request_no、金额和商户权限一致 |
 | 退款核验 | alipay.trade.fastpay.refund.query | 同一退款请求核对明确成功状态及金额 |
 
-当前公开退款文档中，code=10000 仅说明请求处理成功；fund_change=Y 是该退款接口的成功依据，其他情况进一步查询。退款查询需结合 refund_status=REFUND_SUCCESS，不能仅凭金额字段判成功。交易查询中的 TRADE_CLOSED 需结合原付款与退款区分未付关闭和全额退款；TRADE_FINISHED 不用于继续普通退款。依据与本次核对范围见[证据登记](../05-research/evidence-register.md)。
+当前公开退款文档中，code=10000 仅说明请求处理成功；fund_change=Y 是该退款接口的成功依据，其他情况进一步查询。退款查询需结合 refund_status=REFUND_SUCCESS，不能仅凭金额字段判成功。交易查询中的 TRADE_CLOSED 需结合原付款与退款区分未付关闭和全额退款；TRADE_FINISHED 不用于继续普通退款。网页付款的 `notify_url` 可选；未配置通知时，返回页只能触发 API-06R，不能直接声明付款成功。依据与本次核对范围见[证据登记](../05-research/evidence-register.md)。
+
+沙箱网页付款的 `out_trade_no` 由服务端生成，最多 64 个字符且只使用英文字母、数字和下划线；前端或 Agent 不得自行传入渠道订单号。
 
 同一次退款的网络重试保持原单、业务退款号和金额不变。查询调度按所用接口现行建议与限频配置；不得把前端刷新直接变为渠道请求。网页入口、关单、通知的完整字段、签名与沙箱适用性仍需实施前逐项复核。
 
-## 五、错误与恢复
+## 六、错误与恢复
 
 | 类别 | 建议响应 | 后续行为 |
 | --- | --- | --- |
@@ -67,6 +108,37 @@
 
 受理前系统不可用与受理后结果未知必须分开。确认卡片变化、模型取消和用户断网都不自动撤销外部已受理操作。
 
-## 六、契约变更门槛
+## 七、契约变更门槛
 
 P0 已冻结角色、授权、幂等、版本、环境、操作编号和回调关联语义。实现时在代码中补充字段必选性、长度、分页上限、错误示例及回调应答；这些细节不得改变已冻结的业务语义。未来外部接口破坏性变更必须有兼容与数据迁移说明，不能因为文档不带版本号而删除业务版本机制。
+
+## API-24 当前查询与方案切片
+
+所有路径仍带 `/api` 前缀。仅消费者可访问本人计划／运行，两个 POST 均检查 Origin；启动还要求 `Idempotency-Key`，输入为 `{ "message": "当前计划付款了吗？" }`（1—4000 字符）。返回 202 与 `runId`、`reused`、`mode: "proposal_assistant"`。相同计划与键的相同消息复用既有运行，不重放模型；不同消息返回 409。同计划活动运行冲突返回 409，用户令牌桶不足返回 429，模型配置缺失返回 503。
+
+GET 返回 `id`、`plan_id`、`state`、`output`、`error_code`、`model_calls`、`tool_calls`、`snapshot_version`、`created_at`、`finished_at`、`proposal`、`followupRootId`、分支内 `pendingFollowups`、`followupFailed` 与已提交 `actions`。状态包含 RUNNING／WAITING_USER／WAITING_EXTERNAL／COMPLETED／FAILED／CANCELLED；FAILED／CANCELLED 优先展示运行状态，结构化业务仍可操作；不要把 output 当作支付证据。取消幂等，取消目标及其后代待运行／等待状态，关闭该分支队列与观察，不删除订单。超过截止时间的遗留运行在读取或新运行准入时转 FAILED／RUN_EXPIRED。
+
+本切片注册 T01／T02／T03／T10 以及 T04／T08。T01 暂无过滤字段，T02 不接收计划标识（由服务端绑定），T03／T10 接收 `id` 且必须属于当前计划；T10 只读已知事实，不接受复核参数。完整工具目录中的日期过滤、交易执行工具及事件恢复仍是后续契约，不能从本切片推断已实现。
+
+方案工具扩展：T04 接收 `{itemIds: UUID[]}`，T08 接收 `{items: [{planItemId: UUID,intent: keep|stop|close|cancel}]}`；仅创建草稿。成功后运行进入 WAITING_USER，返回的 `proposal` 含原确认卡片字段及 `type`、`status`、`confirmable`、`confirmationId`。字段来自数据库，模型不返回可信金额。`confirmable` 是状态、计划版本和期限的初步判断；点击确认时仍以 API-04／API-11 的最新规则、金额与授权校验为准。
+
+新增 `GET /plans/{id}/agent-runs/latest`，返回 `{run: ...}` 或 `{run: null}`，仅允许消费者读取自己的计划。它用于刷新／重新进入页面时恢复最新方案，读取不会触发模型。WAITING_USER 表示该轮推理已经结束，因此取消接口不会删除其方案；交易执行仍需原确认和执行接口。
+
+## 八、交易工具与事件恢复的接口契约（2026-09-11）
+
+本节记录 009、010 应用后的接口口径；局部行为验证已完成，真实模型、官方渠道和完整 P0 验证仍未完成，详见[验证策略第十三节](../04-quality/verification.md)与[开发计划 1.8](development-plan.md)。
+
+| 能力 | 复用业务接口 | Agent 边界 |
+| --- | --- | --- |
+| 按确认逐项建单 | API-05，`POST /orders` | T05 接受 `confirmationId`、`planItemId`；服务端绑定计划和用户，拒绝金额及主体自填 |
+| 准备付款交接 | API-06，`POST /orders/{id}/payment-handoffs` | T06 接受 `id`；模型只拿订单引用和用户操作说明，签名链接仍仅从受控页面接口返回 |
+| 暂停购买 | API-07，`POST /plans/{id}/pause` | T07 接受空对象；范围、当前版本及用户请求关联由服务端读取本轮原文确定，独立按钮继续使用结构化参数 |
+| 提交已确认变更 | API-12，`POST /change-proposals/{id}/execute` | T09 接受变更方案 `id`；逐单校验有效善后授权，不能代替商户执行退款批次 |
+
+API-04／API-11 仍是仅由用户界面调用的确认接口。确认助手生成的方案后，只有确认事务实际写入恢复队列时才返回 `agentFollowupQueued: true`；结构化方案或用户已停止助手跟进时返回 false。界面在确认前说明后续执行范围，用户手动点击执行与后台恢复进入同一业务服务并返回同一组订单或操作。已受理结果的复用与新的动作准入需要区分，不能因为历史请求可复用就绕过新动作的授权检查。
+
+API-24 的运行读取已返回 `WAITING_EXTERNAL`、父运行／触发事件关联、脱敏动作结果、`followupRootId`、分支内 `pendingFollowups` 与 `followupFailed`。动作结果来自已提交业务记录，不从模型文本解析；取消目标及其后代待运行／等待状态，关闭该分支队列与观察，但不删除订单。
+
+页面恢复读取计划的最新运行，以接收确认或渠道事件启动的新一轮；只查询原 runId 会停留在旧方案。读取不触发模型，后台等待与推理运行分别展示。动作已受理、付款交接已准备、渠道已核验成功必须采用不同文案；暂停也不能显示为已关闭订单。等待轮询由活动运行或分支内 pendingFollowups 驱动，WAITING_EXTERNAL 本身不触发无限轮询。
+
+T10 在事件恢复中仍只读，不提供主动复核参数；普通用户消息运行已支持可选 `requestRecheck=true`，由 API-25 复核查询授权、主体和用途，当前尚缺从用户消息到 Pi 工具的受控端到端证据。该能力不扩大权限；API-06R 仍是消费者付款核验的专属入口。服务端拒绝应区分确认失效、报价变化、暂停／授权失效、重复参数冲突与模型不可用，使用户能够回到对应结构化入口，而非一律提示重新运行模型。

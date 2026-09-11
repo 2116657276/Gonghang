@@ -1,0 +1,7 @@
+packages:
+  - xingzhi/apps/*
+  - xingzhi/packages/*
+allowBuilds:
+  '@google/genai': false
+  esbuild: true
+  protobufjs: false

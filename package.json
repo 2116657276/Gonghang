@@ -1,0 +1,16 @@
+{
+  "name": "gonghang-projects",
+  "private": true,
+  "packageManager": "pnpm@11.19.0",
+  "scripts": {
+    "dev": "concurrently -n web,server,worker -c cyan,green,yellow \"pnpm --filter @xingzhi/web dev\" \"pnpm --filter @xingzhi/server dev\" \"pnpm --filter @xingzhi/server worker\"",
+    "db:migrate": "pnpm --filter @xingzhi/server db:migrate",
+    "db:seed": "pnpm --filter @xingzhi/server db:seed",
+    "typecheck": "pnpm -r typecheck",
+    "test:targeted": "pnpm --filter @xingzhi/server test:targeted",
+    "build": "pnpm -r build"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  }
+}

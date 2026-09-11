@@ -34,6 +34,9 @@ logs/
 npm-debug.log*
 pnpm-debug.log*
 
+# 本地验证输出
+output/
+
 # 编辑器与操作系统文件
 .DS_Store
 .idea/

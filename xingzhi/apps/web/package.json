@@ -1,0 +1,21 @@
+{
+  "name": "@xingzhi/web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "typecheck": "vue-tsc --noEmit",
+    "build": "vue-tsc -b && vite build"
+  },
+  "dependencies": {
+    "@xingzhi/contracts": "workspace:*",
+    "vue": "^3.5.16"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^6.0.0",
+    "typescript": "^5.8.3",
+    "vite": "^7.0.0",
+    "vue-tsc": "^2.2.10"
+  }
+}
