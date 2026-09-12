@@ -129,6 +129,9 @@ export type PlanSnapshot = {
   }>;
   budget: {
     limitMinor: number;
+    totalPaidMinor: number;
+    refundedMinor: number;
+    /** 已支付净额；不用于计算剩余购买授权空间。 */
     paidMinor: number;
     reservedMinor: number;
     remainingMinor: number;

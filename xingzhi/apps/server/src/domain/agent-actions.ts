@@ -72,7 +72,9 @@ export async function executeAgentAction(user:AuthUser,planId:string,runId:strin
       const order=await createConfirmedOrder(client,user,args);
       if(order.operationId)operationIds.push(order.operationId);
       await watchAgentOrder(client,runId,order.orderId,'purchase');
-      result={...order,message:'订单已受理。模拟付款由本地任务处理；官方付款仍需用户在付款页面完成。'};
+      result={...order,message:order.environment==='simulation'
+        ?'本地模拟订单已受理，模拟付款由后台任务处理，没有官方收银台。请调用 request_payment 读取当前付款状态。'
+        :'沙箱订单已受理，请调用 request_payment 准备付款交接，再由用户在付款卡片进入官方收银台。建单不等于付款成功。'};
     }else if(name==='request_payment'){
       const {id}=idInput.parse(input);
       const order=(await client.query<{environment:string;payment_status:string}>(

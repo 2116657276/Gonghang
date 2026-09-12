@@ -7,11 +7,11 @@ import { closePool, transaction } from './db/client.js';
 import { reserveModelCost, settleModelCost } from './domain/model-budget.js';
 import { deepseekPricing, modelCostMicros } from './domain/model-pricing.js';
 
-// Official peak prices verified 2026-09-08; record conservative estimates, not provider bills.
+// Official DeepSeek V4.1 Flash peak prices verified 2026-09-12; record conservative estimates, not provider bills.
 const key=process.env.DEEPSEEK_API_KEY;
 const baseUrl=process.env.DEEPSEEK_BASE_URL??'https://api.deepseek.com';
-const modelId=process.env.DEEPSEEK_MODEL??'deepseek-v4-flash';
-if(!key?.trim() || baseUrl!=='https://api.deepseek.com' || modelId!=='deepseek-v4-flash') {
+const modelId=process.env.DEEPSEEK_MODEL??'deepseek-flash';
+if(!key?.trim() || baseUrl!=='https://api.deepseek.com' || modelId!=='deepseek-flash') {
   console.error('模型烟测未发送：请在本机 .env 配置 DEEPSEEK_API_KEY，并保持已确认模型与地址。');
   process.exitCode=2;
 } else {

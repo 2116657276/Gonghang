@@ -25,12 +25,16 @@ export function readOnlyAgentTools(user: AuthUser, planId: string, beforeTool: (
         return transaction(async client => {
           const snapshot=await planSnapshot(client,planId,user);
           const confirmations=await client.query(`SELECT c.id AS "confirmationId",c.proposal_id AS "proposalId",c.type,p.status,
-            c.snapshot FROM confirmations c JOIN proposals p ON p.id=c.proposal_id
+            c.snapshot, COALESCE((SELECT jsonb_agg(jsonb_build_object('orderId',o.id,'planItemId',o.plan_item_id,
+              'status',o.status,'paymentStatus',o.payment_status) ORDER BY o.created_at,o.id)
+              FROM orders o WHERE o.confirmation_id=c.id),'[]') AS "linkedOrders"
+            FROM confirmations c JOIN proposals p ON p.id=c.proposal_id
             WHERE c.plan_id=$1 AND c.owner_id=$2 ORDER BY c.created_at DESC LIMIT 20`,[planId,user.id]);
           const operations=await client.query('SELECT id,type,state,entity_id FROM operations WHERE plan_id=$1 ORDER BY created_at DESC LIMIT 30',[planId]);
           return {...snapshot,
             displayAmounts: {
-              budget: { limit: toYuan(snapshot.budget.limitMinor), netSpent: toYuan(snapshot.budget.paidMinor),
+              budget: { limit: toYuan(snapshot.budget.limitMinor), totalPaid: toYuan(snapshot.budget.totalPaidMinor),
+                refunded: toYuan(snapshot.budget.refundedMinor), netSpent: toYuan(snapshot.budget.paidMinor),
                 reserved: toYuan(snapshot.budget.reservedMinor), remaining: toYuan(snapshot.budget.remainingMinor) },
               orders: snapshot.orders.map(order => ({ orderId: order.id, itemName: order.itemName,
                 amount: toYuan(order.amountMinor), refunded: toYuan(order.refundedMinor) })),

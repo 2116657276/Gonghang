@@ -50,7 +50,9 @@ export async function claimAgentWakeup() {
     const row=(await client.query<{id:string;email:string;display_name:string;role:AuthUser['role']}>('SELECT id,email,display_name,role FROM users WHERE id=$1',[parent.owner_id])).rows[0]!;
     const user:AuthUser={id:row.id,email:row.email,displayName:row.display_name,role:row.role};
     const input=isConfirmation
-      ?`服务端已记录用户确认。先读取当前计划与已有动作，仅继续本次${event.type==='purchase.confirmed'?'购买':'变更'}确认：confirmationId=${event.data.confirmationId}，proposalId=${event.data.proposalId}。已建订单和已受理操作必须复用，失效授权停止并说明。不得生成或确认新方案。`
+      ?`服务端已记录用户确认。先读取当前计划与已有动作，仅继续本次${event.type==='purchase.confirmed'?'购买':'变更'}确认：confirmationId=${event.data.confirmationId}，proposalId=${event.data.proposalId}。${event.type==='purchase.confirmed'
+        ?'为本次确认的每个项目创建或复用订单，再逐单调用 request_payment 读取模拟付款状态或准备沙箱付款交接；这些动作已在本次确认范围内，不再索要口头同意。模拟订单由后台任务处理，没有官方收银台；仅沙箱待付订单提示用户到付款卡片完成付款。'
+        :'使用本次 proposalId 调用 submit_change，提交已确认变更；退款批次仍由商户执行。'}已建订单和已受理操作必须复用，失效授权停止并说明。不得生成或确认新方案。`
       :'当前计划收到关联业务的新事实。只读取最新业务快照并解释结果、未决金额和下一步责任，不执行任何写工具，不请求渠道查询。';
     try{
       const attempt=wakeup.attempts+1;

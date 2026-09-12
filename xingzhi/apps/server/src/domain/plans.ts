@@ -161,9 +161,11 @@ export async function planSnapshot(client: PoolClient, planId: string, user: Aut
     }),
     budget: {
       limitMinor: plan.purchase_limit_minor,
+      totalPaidMinor: paid,
+      refundedMinor: refunded,
       paidMinor: paid - refunded,
       reservedMinor: reserved,
-      remainingMinor: remainingBudget(plan.purchase_limit_minor, paid - refunded, reserved),
+      remainingMinor: remainingBudget(plan.purchase_limit_minor, paid, reserved),
     },
     pending: operationsResult.rows.map((operation) => operation.type),
   };

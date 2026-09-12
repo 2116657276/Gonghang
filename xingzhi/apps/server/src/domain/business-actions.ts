@@ -15,13 +15,12 @@ import type { PlanItemRow } from './proposals.js';
 type ProposalRow = { id:string; plan_id:string; owner_id:string; type:'purchase'|'change'; plan_version:number; snapshot:Record<string,any>; status:string; expires_at:Date };
 
 export async function budgetForPlan(client: PoolClient, planId: string) {
-  const result = await client.query<{ payment_status: string; amount_minor: number; reserved_minor: number; refunded_minor: number }>(
-    'SELECT payment_status, amount_minor, reserved_minor, refunded_minor FROM orders WHERE plan_id = $1 FOR UPDATE', [planId],
+  const result = await client.query<{ payment_status: string; amount_minor: number; reserved_minor: number }>(
+    'SELECT payment_status, amount_minor, reserved_minor FROM orders WHERE plan_id = $1 FOR UPDATE', [planId],
   );
   const paid = sumMinor(result.rows.filter((order) => order.payment_status === 'paid').map((order) => order.amount_minor));
-  const refunded = sumMinor(result.rows.map((order) => order.refunded_minor));
   const reserved = sumMinor(result.rows.filter((order) => ['pending', 'unknown'].includes(order.payment_status)).map((order) => order.reserved_minor));
-  return { paid: paid - refunded, reserved };
+  return { paid, reserved };
 }
 
 

@@ -394,8 +394,11 @@ test('Pi 变更确认至商户善后连续链：A 保留、B 分批退款、C �
     const snapshotTool = readOnlyAgentTools(f.user, f.planId, async () => {}).find(tool => tool.name === 'get_plan_orders')!;
     const toolSnapshot = await snapshotTool.execute('check-display', {});
     const data = JSON.parse((toolSnapshot.content[0] as { text: string }).text).data;
-    assert.deepEqual(data.displayAmounts.budget, { limit: '¥3000.00', netSpent: '¥1760.00', reserved: '¥880.00', remaining: '¥360.00' });
+    assert.deepEqual(data.displayAmounts.budget, { limit: '¥3000.00', totalPaid: '¥1760.00', refunded: '¥0.00', netSpent: '¥1760.00', reserved: '¥880.00', remaining: '¥360.00' });
     assert.deepEqual(data.confirmedActions.find((action: { type: string }) => action.type === 'change').submitChangeInput, { id: draft.proposalId });
+    const purchasedOrders = data.confirmedActions.find((action: { type: string }) => action.type === 'purchase').linkedOrders;
+    assert.deepEqual(purchasedOrders.map((order: { orderId: string }) => order.orderId).sort(), [...orderIds].sort());
+    assert.equal(purchasedOrders.filter((order: { paymentStatus: string }) => order.paymentStatus === 'paid').length, 2);
     const recovery = await claimAgentWakeup();
     assert.ok(recovery);
     const executeScript = scriptedTools([
@@ -439,6 +442,9 @@ test('Pi 变更确认至商户善后连续链：A 保留、B 分批退款、C �
     assert.equal(snapshot.orders.find((order: { id: string }) => order.id === orderIds[2]).paymentStatus, 'closed');
     assert.equal(snapshot.items.find((item: { id: string }) => item.id === d!.id).status, 'stopped');
     assert.equal(snapshot.orders.length, 3);
+    assert.equal(snapshot.budget.totalPaidMinor, 176000);
+    assert.equal(snapshot.budget.refundedMinor, 80000);
+    assert.equal(snapshot.budget.remainingMinor, 124000);
     assert.equal(snapshot.budget.paidMinor, 96000);
     assert.equal(snapshot.budget.reservedMinor, 0);
     assert.equal((await pool.query('SELECT count(*)::int AS n FROM agent_order_watches WHERE run_id=$1 AND active', [recovery.runId])).rows[0].n, 0);
@@ -476,5 +482,36 @@ test('Pi 变更确认至商户善后连续链：A 保留、B 分批退款、C �
     assert.equal(refreshed.cancellations[0].manualTasks[0].state, 'open');
     assert.equal(refreshed.cancellations[0].refundedMinor, 80000);
 
+  } finally { await app.close(); }
+});
+
+test('退款不回补购买空间，重新确认不能降低历史累计或绕过建单上限', async () => {
+  const app = await buildApp();
+  try {
+    const f = await fixture(3);
+    const first = await transaction(client => createPurchaseProposal(client, f.user, f.planId, { itemIds: [f.items[0]!.id, f.items[1]!.id] }));
+    const accepted = await confirm(app, f.user, first.proposalId, first.version, [f.items[0]!.id, f.items[1]!.id]);
+    for (const item of f.items.slice(0, 2)) await transaction(client => createConfirmedOrder(client, f.user, {
+      confirmationId: accepted.confirmationId, planItemId: item.id,
+    }));
+    // Isolate the post-refund budget rule; refund execution is covered by the continuous chain above.
+    await pool.query("UPDATE orders SET payment_status='paid',status='cancelled',refunded_minor=amount_minor,reserved_minor=0 WHERE plan_id=$1", [f.planId]);
+    const next = await transaction(client => createPurchaseProposal(client, f.user, f.planId, { itemIds: [f.items[2]!.id] }));
+    const session = await createSession(f.user.id);
+    const confirmWithLimit = (purchaseLimitMinor: number) => app.inject({ method: 'POST', url: `/api/purchase-proposals/${next.proposalId}/confirm`,
+      cookies: { xingzhi_session: session.token }, headers: { origin: config.webOrigin, 'idempotency-key': randomUUID() },
+      payload: { expectedVersion: next.version, acceptedItemIds: [f.items[2]!.id], purchaseLimitMinor, restoreItemIds: [] } });
+    const belowHistory = await confirmWithLimit(100000);
+    assert.equal(belowHistory.statusCode, 422);
+    assert.match(belowHistory.body, /LIMIT_BELOW_HISTORY/);
+    const renewed = await confirmWithLimit(200000);
+    assert.equal(renewed.statusCode, 201, renewed.body);
+    await assert.rejects(transaction(client => createConfirmedOrder(client, f.user, {
+      confirmationId: renewed.json().confirmationId, planItemId: f.items[2]!.id,
+    })), /剩余额度不足/);
+    const snapshot = (await app.inject({ method: 'GET', url: `/api/plans/${f.planId}`, cookies: { xingzhi_session: session.token } })).json();
+    assert.deepEqual(snapshot.budget, { limitMinor: 200000, totalPaidMinor: 176000, refundedMinor: 176000,
+      paidMinor: 0, reservedMinor: 0, remainingMinor: 24000 });
+    assert.equal(snapshot.orders.length, 2);
   } finally { await app.close(); }
 });

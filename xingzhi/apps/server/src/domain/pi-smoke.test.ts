@@ -5,7 +5,7 @@ import { Type, createAssistantMessageEventStream, type AssistantMessage, type Mo
 
 // This model never reaches a provider: the stream below is a deterministic local fixture.
 const model: Model<'openai-completions'> = {
-  id:'deepseek-v4-flash',name:'Local smoke fixture',api:'openai-completions',provider:'deepseek',
+  id:'deepseek-flash',name:'Local smoke fixture',api:'openai-completions',provider:'deepseek',
   baseUrl:'https://api.deepseek.com',reasoning:false,input:['text'],contextWindow:8192,maxTokens:512,
   cost:{input:0,output:0,cacheRead:0,cacheWrite:0},
 };

@@ -370,7 +370,7 @@ test('API-24 确定性 Pi 只读循环持久化输出与人民币费用，重复
     assert.equal(result.model_calls,2);assert.equal(result.tool_calls,1);
     assert.equal((await testApp.inject(request)).json().runId,runId);assert.equal(calls,2);
     const budget=(await pool.query('SELECT spent_micros,reserved_micros FROM model_budget')).rows[0];
-    assert.equal(Number(budget.spent_micros),154);assert.equal(Number(budget.reserved_micros),0);
+    assert.equal(Number(budget.spent_micros),122);assert.equal(Number(budget.reserved_micros),0);
   } finally {await testApp.close();}
 });
 
@@ -390,7 +390,7 @@ test('Agent 调用中取消保留未知费用，不能回写完成或改变订�
   await ready;await cancelAgentRun(user,run.runId);controller.abort();await task;
   assert.equal((await readAgentRun(user,run.runId)).state,'CANCELLED');
   const usage=(await pool.query('SELECT state,reserved_micros FROM model_usage WHERE purpose=$1',[`agent_run:${run.runId}:1`])).rows[0];
-  assert.notEqual(usage.state,'settled');assert.equal(Number(usage.reserved_micros),3_009_216);
+  assert.notEqual(usage.state,'settled');assert.equal(Number(usage.reserved_micros),2_008_192);
   assert.equal((await pool.query('SELECT payment_status FROM orders WHERE id=$1',[f.order])).rows[0].payment_status,'pending');
 });
 
@@ -493,10 +493,11 @@ test('Pi HTTP 429 重试逐次记账，成功结算不释放缺失 usage 的旧�
   const savedKey=process.env.DEEPSEEK_API_KEY; process.env.DEEPSEEK_API_KEY='local-fixture-no-network';
   let attempts=0;
   try {
-    await executeAgentRun(run.runId,f.plan,user,'只读测试',new AbortController().signal,undefined,async () => {
+    await executeAgentRun(run.runId,f.plan,user,'只读测试',new AbortController().signal,undefined,async (_url,init) => {
       attempts++;
+      assert.equal(JSON.parse(String(init?.body)).model,'deepseek-flash');
       if(attempts===1)return new Response('limited',{status:429,headers:{'Retry-After':'0'}});
-      const chunk={id:'fixture',object:'chat.completion.chunk',created:1,model:'deepseek-v4-flash',
+      const chunk={id:'fixture',object:'chat.completion.chunk',created:1,model:'deepseek-flash',
         choices:[{index:0,delta:{role:'assistant',content:'这是本地只读测试。'},finish_reason:'stop'}],
         usage:{prompt_tokens:10,completion_tokens:5,total_tokens:15}};
       return new Response(`data: ${JSON.stringify(chunk)}\n\ndata: [DONE]\n\n`,{headers:{'Content-Type':'text/event-stream'}});
@@ -508,6 +509,6 @@ test('Pi HTTP 429 重试逐次记账，成功结算不释放缺失 usage 的旧�
   assert.equal(result.state,'COMPLETED'); assert.equal(result.model_calls,2); assert.equal(attempts,2);
   const records=(await pool.query('SELECT state,reserved_micros,settled_micros FROM model_usage WHERE purpose LIKE $1 ORDER BY purpose',[`agent_run:${run.runId}:%`])).rows;
   assert.equal(records.length,2); assert.notEqual(records[0].state,'settled');
-  assert.equal(Number(records[0].reserved_micros),3_009_216);
-  assert.equal(records[1].state,'settled'); assert.equal(Number(records[1].settled_micros),75);
+  assert.equal(Number(records[0].reserved_micros),2_008_192);
+  assert.equal(records[1].state,'settled'); assert.equal(Number(records[1].settled_micros),60);
 });

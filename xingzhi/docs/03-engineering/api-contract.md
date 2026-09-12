@@ -4,7 +4,7 @@
 | --- | --- |
 | 文档编号 | XZ-API |
 | 更新日期 | 2026-09-12 |
-| 状态 | 2026-09-12 已应用 009—011；交易工具、事件恢复、T10 普通消息复核、变更善后连续链及页面衔接已作本地受控核对，真实模型仅有局部评测；当前工作区 47 项定向测试、类型检查与构建通过，S4／S5 仍未放行，详见[验证策略第十三、十四节](../04-quality/verification.md)与[开发计划 1.8—1.10](development-plan.md) |
+| 状态 | 2026-09-12 已应用 009—011；交易工具、事件恢复、T10 普通消息复核、变更善后连续链及页面衔接已作本地受控核对；DeepSeek V4.1 Flash 已切换为官方 API 标识 `deepseek-flash`，实际检查结果及适用版本见验证记录，真实业务模型证据仍对应旧模型；S4／S5 仍未放行，详见[验证策略第十三至十六节](../04-quality/verification.md)与[开发计划](development-plan.md) |
 
 ## 一、公共约定
 
@@ -18,7 +18,7 @@
 
 本文件描述目标契约，不表示列出的接口均已达到完整 P0 放行。开发前静态核对曾发现 API-06R 调用前缺少合并／限频、API-25 只有人工任务、API-12 未按环境分派，API-22 也只有模拟执行；这些观察已由本轮修正，不再作为当前实现状态。
 
-当前实现已按对象环境分派 API-12；API-22 在配置就绪时创建沙箱固定退款批次并由渠道 worker 按原号查询；API-06R 在访问渠道前复用缓存并限制同单 15 秒查询时隙，等待时返回 202；API-25 返回 `recheckOperationId`，沙箱任务由 worker 执行前复核授权，模拟对象仍转人工任务。交易工具、确认事件恢复、T10 复核和页面衔接已随 009—011 接入，局部行为和类型检查结果见验证策略第十三、十四节；全部官方渠道实测仍未完成。
+当前实现已按对象环境分派 API-12；API-22 在配置就绪时创建沙箱固定退款批次并由渠道 worker 按原号查询；API-06R 在访问渠道前复用缓存并限制同单 15 秒查询时隙，等待时返回 202；API-25 返回 `recheckOperationId`，沙箱任务由 worker 执行前复核授权，模拟对象仍转人工任务。交易工具、确认事件恢复、T10 复核和页面衔接已随 009—011 接入，局部行为和类型检查结果见验证策略第十三至十五节；全部官方渠道实测仍未完成。
 
 ### 1.2 共用业务入口与请求生命周期
 
@@ -65,7 +65,7 @@ API-04／API-11 只保存确认、授权和事件，不直接执行外部交易�
 | API-21 | GET /merchant/orders；GET /merchant/cancellations；POST /merchant/cancellations/{id}/decisions | 本商户订单及取消队列；按规则受理、批准、拒绝或延迟，返回原因、取消状态与 operationId |
 | API-22 | GET /merchant/cancellations/{id}/refund-batches；POST /merchant/cancellations/{id}/refund-batches | 商户查看／执行规则规定的退款安排；校验已批准取消、用户接受总额和批次，Agent／消费者不能调用；重复安排返回既有批次 |
 | API-23 | GET /merchant/manual-tasks；POST /merchant/manual-tasks/{id}/actions | 人工任务及责任、下一步、复核时间；只允许领取、按原请求复核／重试、记录外部处理说明，不提供手改资金成功入口 |
-| API-24 | POST /plans/{id}/agent-runs；GET /agent-runs/{id}；POST /agent-runs/{id}/cancel | 消费者输入与事件恢复运行、读取输出和停止推理；同计划仅一个活动决策循环；调用固定 Pi v0.85.1 + DeepSeek `deepseek-v4-flash`，受每分钟 10 次／突发 2、同计划并发 1、每轮 8 次模型调用／20 次工具调用／120 秒和累计 ¥100 费用账本约束；取消不撤销已受理业务操作 |
+| API-24 | POST /plans/{id}/agent-runs；GET /agent-runs/{id}；POST /agent-runs/{id}/cancel | 消费者输入与事件恢复运行、读取输出和停止推理；同计划仅一个活动决策循环；当前使用 Pi v0.85.1 + DeepSeek V4.1 Flash（API 标识 `deepseek-flash`，用户简称“ds4.1flash”），受每分钟 10 次／突发 2、同计划并发 1、每轮 8 次模型调用／20 次工具调用／120 秒和累计 ¥100 费用账本约束；新模型业务效果与官方交易仍须另行验收；取消不撤销已受理业务操作 |
 | API-25 | POST /operations/{id}/rechecks | 请求复核既有交易；消费者／Agent 须有有效查询授权，商户须有本商户交易职责；记录主体与用途并合并待查任务 |
 | API-26 | POST /payments/alipay/notify | 渠道通知；不使用用户会话，依据渠道签名、应用、卖家、订单、金额和去重判断 |
 | API-27 | GET /evidence-exports/{id} | 复核用户归属／审核范围后下载已生成的 HTML／JSON；过期返回明确错误并需重新申请 |
@@ -126,7 +126,7 @@ GET 返回 `id`、`plan_id`、`state`、`output`、`error_code`、`model_calls`�
 
 ## 八、交易工具与事件恢复的接口契约（2026-09-12）
 
-本节记录 009—011 应用后的接口口径；交易工具、事件恢复、T10 复核和变更善后连续链已有本地受控行为证据，真实模型仅有局部评测，官方渠道和完整 P0 验证仍未完成，详见[验证策略第十三、十四节](../04-quality/verification.md)与[开发计划 1.8—1.10](development-plan.md)。
+本节记录 009—011 应用后的接口口径；交易工具、事件恢复、T10 复核和变更善后连续链已有本地受控行为证据，DeepSeek V4.1 Flash 的运行标识、请求体和费率已作本地核对，真实模型业务评测、官方渠道和完整 P0 验证仍未完成，详见[验证策略第十三至十六节](../04-quality/verification.md)与[开发计划](development-plan.md)。
 
 | 能力 | 复用业务接口 | Agent 边界 |
 | --- | --- | --- |
