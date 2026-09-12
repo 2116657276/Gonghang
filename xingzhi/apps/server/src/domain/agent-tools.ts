@@ -7,6 +7,7 @@ import { ownedPlan } from './access.js';
 import { planSnapshot } from './plans.js';
 import { readCatalog, readCancellationQuote, readOperation } from './business-reads.js';
 import { notFound } from './errors.js';
+import { toYuan } from './money.js';
 import { sanitizeEvidence } from './evidence.js';
 import { executeAgentAction, type ExecutionTool } from './agent-actions.js';
 import { createAgentProposal } from './agent-proposals.js';
@@ -27,7 +28,16 @@ export function readOnlyAgentTools(user: AuthUser, planId: string, beforeTool: (
             c.snapshot FROM confirmations c JOIN proposals p ON p.id=c.proposal_id
             WHERE c.plan_id=$1 AND c.owner_id=$2 ORDER BY c.created_at DESC LIMIT 20`,[planId,user.id]);
           const operations=await client.query('SELECT id,type,state,entity_id FROM operations WHERE plan_id=$1 ORDER BY created_at DESC LIMIT 30',[planId]);
-          return {...snapshot,confirmedActions:confirmations.rows,operations:operations.rows};
+          return {...snapshot,
+            displayAmounts: {
+              budget: { limit: toYuan(snapshot.budget.limitMinor), netSpent: toYuan(snapshot.budget.paidMinor),
+                reserved: toYuan(snapshot.budget.reservedMinor), remaining: toYuan(snapshot.budget.remainingMinor) },
+              orders: snapshot.orders.map(order => ({ orderId: order.id, itemName: order.itemName,
+                amount: toYuan(order.amountMinor), refunded: toYuan(order.refundedMinor) })),
+            },
+            confirmedActions: confirmations.rows.map(confirmation => ({ ...confirmation,
+              ...(confirmation.type === 'change' ? { submitChangeInput: { id: confirmation.proposalId } } : {}),
+            })), operations:operations.rows};
         });
       } },
     { name: 'get_cancellation_quote', label: '读取取消报价', description: '读取当前计划已付款订单的测试商户报价，不批准退款。', parameters: Type.Object({ id: Type.String({ format: 'uuid' }) }, { additionalProperties: false }),
@@ -87,8 +97,8 @@ export function executionAgentTools(user:AuthUser,planId:string,runId:string,bef
       parameters:Type.Object({id:Type.String({format:'uuid'})},{additionalProperties:false})},
     {name:'pause_purchases',label:'暂停购买',description:'仅执行本轮用户明确发出的暂停指令，范围由服务端从原始消息核定，工具不能自填范围。含糊意图需澄清。',
       parameters:Type.Object({},{additionalProperties:false})},
-    {name:'submit_change',label:'提交已确认变更',description:'按当前计划用户已确认的变更方案提交关单或取消申请，不执行商户退款。id 是变更方案标识。',
-      parameters:Type.Object({id:Type.String({format:'uuid'})},{additionalProperties:false})},
+    {name:'submit_change',label:'提交已确认变更',description:'按当前计划用户已确认的变更方案提交关单或取消申请，不执行商户退款。直接使用 get_plan_orders 的 confirmedActions 中 type=change 记录的 submitChangeInput；id 必须是 proposalId，不是 confirmationId 或 orderId。',
+      parameters:Type.Object({id:Type.String({format:'uuid',description:'原样使用已确认变更记录的 proposalId（submitChangeInput.id），不要使用确认或订单标识。'})},{additionalProperties:false})},
   ];
   return definitions.map(tool=>({...tool,async execute(callId:string,args:unknown){
     await beforeTool(tool.name);

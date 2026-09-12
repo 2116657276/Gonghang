@@ -4,7 +4,7 @@ import { dateTime, yuan } from '../lib/api';
 import StatusPill from './StatusPill.vue';
 
 const props = defineProps<{ cancellations: MerchantCancellation[]; batches: Record<string, RefundBatch[]>; busy?: boolean }>();
-const emit = defineEmits<{ decide: [id: string, decision: 'approve' | 'reject']; schedule: [id: string] }>();
+const emit = defineEmits<{ decide: [id: string, decision: 'approve' | 'reject']; schedule: [id: string]; recheck: [operationId: string] }>();
 
 function remaining(item: MerchantCancellation) {
   return Math.max(0, item.acceptedRefundMinor - item.refundedMinor - item.pendingRefundMinor);
@@ -33,7 +33,7 @@ function expectedDecision(item: MerchantCancellation) {
         </dl>
         <p class="muted">规则快照：{{ item.rulePreset }}（版本 {{ item.ruleVersion }}）<template v-if="item.decisionReason">；{{ item.decisionReason }}</template></p>
         <ol v-if="batches[item.id]?.length" class="batch-list" aria-label="已安排退款批次">
-          <li v-for="batch in batches[item.id]" :key="batch.id"><span>第 {{ batch.batchNumber }} 批 · {{ yuan(batch.amountMinor) }}<small>{{ dateTime(batch.updatedAt) }}</small></span><StatusPill :value="batch.status" /></li>
+          <li v-for="batch in batches[item.id]" :key="batch.id"><span>第 {{ batch.batchNumber }} 批 · {{ yuan(batch.amountMinor) }}<small>{{ batch.environment === 'sandbox' ? '支付宝沙箱' : '本地模拟' }} · {{ dateTime(batch.updatedAt) }}</small></span><div class="button-row"><StatusPill :value="batch.status" /><button v-if="batch.operationId" class="text-button" type="button" :disabled="busy" @click="emit('recheck', batch.operationId)">复核第 {{ batch.batchNumber }} 批退款</button></div></li>
         </ol>
         <div class="button-row">
           <template v-if="item.status === 'delayed'">

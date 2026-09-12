@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
-import { api, type ApiError } from '../lib/api';
+import { requestOperationRecheck, api, type ApiError } from '../lib/api';
 import type { AgentProposal, CatalogItem, ChangeProposal, EventItem, PaymentHandoff, Plan, PurchaseProposal } from '../lib/types';
 import AgentPanel from '../components/AgentPanel.vue';
 import ActivityFeed from '../components/ActivityFeed.vue';
@@ -176,6 +176,13 @@ async function recheckPayment(orderId: string) {
   });
 }
 
+async function recheckOperation(operationId: string) {
+  await perform(async () => {
+    notice.value = await requestOperationRecheck(operationId, '用户在消费者工作台明确请求复核既有交易。');
+    await refresh();
+  });
+}
+
 async function revokeAftercareAndQuery() {
   if (!plan.value) return;
   await perform(async () => {
@@ -230,7 +237,7 @@ onBeforeUnmount(() => { if (poller) window.clearInterval(poller); });
       <AgentPanel :key="plan.id" :plan-id="plan.id" :plan-version="plan.version" :busy="busy" @review="reviewAgentProposal" />
       <PaymentProgressPanel :plan="plan" :handoffs="paymentHandoffs" :busy="busy" @handoff="requestPaymentHandoff" @recheck="recheckPayment" />
       <ChangePanel :plan="plan" :proposal="changeProposal" :confirmed="changeConfirmed" :busy="busy" @preview="previewChange" @confirm="confirmChange" @execute="executeChange" @clear="clearChange" />
-      <AftercarePanel :plan="plan" :busy="busy" @revoke="revokeAftercareAndQuery" @renew="renewQuery" />
+      <AftercarePanel :plan="plan" :busy="busy" @revoke="revokeAftercareAndQuery" @renew="renewQuery" @recheck="recheckOperation" />
     </div>
     <aside class="side-column">
       <PurchasePanel :plan="plan" :proposal="purchaseProposal" :confirmed="Boolean(purchaseConfirmationId)" :busy="busy" @preview="previewPurchase" @confirm="confirmPurchase" @create-orders="createOrders" @clear="clearPurchase" />

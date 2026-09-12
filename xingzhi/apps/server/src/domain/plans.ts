@@ -48,6 +48,7 @@ type CancellationRow = {
 
 type RefundBatchRow = {
   id: string;
+  operation_id: string | null;
   cancellation_request_id: string;
   batch_number: number;
   amount_minor: number;
@@ -57,6 +58,7 @@ type RefundBatchRow = {
 
 type ManualTaskRow = {
   id: string;
+  order_id: string | null;
   cancellation_request_id: string | null;
   type: string;
   state: string;
@@ -80,11 +82,11 @@ export async function planSnapshot(client: PoolClient, planId: string, user: Aut
       cancellation_requests.accepted_refund_minor, cancellation_requests.updated_at
       FROM cancellation_requests JOIN orders ON orders.id = cancellation_requests.order_id
       WHERE orders.plan_id = $1 ORDER BY cancellation_requests.updated_at DESC`, [planId]),
-    client.query<RefundBatchRow>(`SELECT refund_batches.id, refund_batches.cancellation_request_id, refund_batches.batch_number,
+    client.query<RefundBatchRow>(`SELECT refund_batches.id, refund_batches.operation_id, refund_batches.cancellation_request_id, refund_batches.batch_number,
       refund_batches.amount_minor, refund_batches.status, refund_batches.updated_at
       FROM refund_batches JOIN orders ON orders.id = refund_batches.order_id
       WHERE orders.plan_id = $1 ORDER BY refund_batches.batch_number`, [planId]),
-    client.query<ManualTaskRow>(`SELECT id, cancellation_request_id, type, state, reason, next_action, next_review_at
+    client.query<ManualTaskRow>(`SELECT id, order_id, cancellation_request_id, type, state, reason, next_action, next_review_at
       FROM manual_tasks WHERE plan_id = $1 ORDER BY next_review_at`, [planId]),
   ]);
   const orders = ordersResult.rows;
@@ -140,12 +142,14 @@ export async function planSnapshot(client: PoolClient, planId: string, user: Aut
         updatedAt: cancellation.updated_at.toISOString(),
         batches: batches.map((batch) => ({
           id: batch.id,
+          operationId: batch.operation_id,
           batchNumber: batch.batch_number,
           amountMinor: batch.amount_minor,
           status: batch.status,
           updatedAt: batch.updated_at.toISOString(),
         })),
-        manualTasks: manualTasksResult.rows.filter((task) => task.cancellation_request_id === cancellation.id).map((task) => ({
+        manualTasks: manualTasksResult.rows.filter((task) => task.cancellation_request_id === cancellation.id
+          || (!task.cancellation_request_id && task.order_id === cancellation.order_id)).map((task) => ({
           id: task.id,
           type: task.type,
           state: task.state,

@@ -1,3 +1,5 @@
+import type { OperationRecheck } from './types.js';
+
 export type ApiError = Error & { status?: number; code?: string };
 
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -24,3 +26,14 @@ export const yuan = (minor: number) => new Intl.NumberFormat('zh-CN', {
 export const dateTime = (value: string | Date) => new Intl.DateTimeFormat('zh-CN', {
   month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false,
 }).format(new Date(value));
+
+export async function requestOperationRecheck(operationId: string, reason: string): Promise<string> {
+  const result = await api<OperationRecheck>(`/operations/${operationId}/rechecks`, {
+    method: 'POST', body: JSON.stringify({ reason }),
+  });
+  return result.manualTaskId
+    ? '模拟交易复核已交由商户人工跟进；受理不代表退款成功。'
+    : result.reused
+      ? '已合并到已有复核请求；请等待后台核验，退款金额以明确结果为准。'
+      : '复核请求已排队；后台核验后更新事实，受理不代表退款成功。';
+}

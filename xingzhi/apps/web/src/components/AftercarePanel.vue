@@ -5,10 +5,12 @@ import { dateTime, yuan } from '../lib/api';
 import StatusPill from './StatusPill.vue';
 
 const props = defineProps<{ plan: Plan; busy?: boolean }>();
-const emit = defineEmits<{ revoke: []; renew: [orderIds: string[]] }>();
+const emit = defineEmits<{ revoke: []; renew: [orderIds: string[]]; recheck: [operationId: string] }>();
 
 const currentAuthorizations = computed(() => props.plan.authorizations.filter((item) => ['aftercare', 'query'].includes(item.type)));
 const renewableOrderIds = computed(() => [...new Set(props.plan.cancellations.map((item) => item.orderId))]);
+const canQuery = (orderId: string) => props.plan.authorizations.some((item) =>
+  item.type === 'query' && item.status === 'active' && Date.parse(item.expiresAt) > Date.now() && item.orderIds.includes(orderId));
 const itemName = (orderId: string) => props.plan.orders.find((order) => order.id === orderId)?.itemName ?? '订单';
 const authorizationLabel = (type: string) => type === 'aftercare' ? '善后授权' : '查询授权';
 </script>
@@ -41,9 +43,13 @@ const authorizationLabel = (type: string) => type === 'aftercare' ? '善后授�
         <ol v-if="cancellation.batches.length" class="batch-list" aria-label="退款批次">
           <li v-for="batch in cancellation.batches" :key="batch.id">
             <span>第 {{ batch.batchNumber }} 批 · {{ yuan(batch.amountMinor) }}</span>
-            <StatusPill :value="batch.status" />
+            <div class="button-row">
+              <StatusPill :value="batch.status" />
+              <button v-if="batch.operationId" class="text-button" type="button" :disabled="busy || !canQuery(cancellation.orderId)" @click="emit('recheck', batch.operationId)">复核第 {{ batch.batchNumber }} 批退款</button>
+            </div>
           </li>
         </ol>
+        <p v-if="cancellation.batches.some((batch) => batch.operationId) && !canQuery(cancellation.orderId)" class="muted">该订单没有有效查询授权；请先续期查询，再请求复核。</p>
         <div v-for="task in cancellation.manualTasks.filter((item) => item.state !== 'resolved')" :key="task.id" class="responsibility-note">
           <strong>当前由商户人工跟进</strong>
           <p>{{ task.reason }}</p>

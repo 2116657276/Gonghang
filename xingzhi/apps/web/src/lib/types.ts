@@ -26,7 +26,7 @@ export type Plan = {
   cancellations: Array<{
     id: string; orderId: string; status: string; decision: string | null; decisionReason: string | null;
     acceptedFeeMinor: number; acceptedRefundMinor: number; refundedMinor: number; pendingRefundMinor: number; updatedAt: string;
-    batches: Array<{ id: string; batchNumber: number; amountMinor: number; status: string; updatedAt: string }>;
+    batches: Array<{ id: string; operationId: string | null; batchNumber: number; amountMinor: number; status: string; updatedAt: string }>;
     manualTasks: Array<{ id: string; type: string; state: string; reason: string; nextAction: string; nextReviewAt: string }>;
   }>;
   budget: { limitMinor: number; paidMinor: number; reservedMinor: number; remainingMinor: number };
@@ -104,4 +104,8 @@ export type ManualTask = {
   id: string; type: string; state: string; planId: string; orderId: string | null; cancellationRequestId: string | null;
   refundBatchId: string | null; operationId: string | null; reason: string; nextAction: string; nextReviewAt: string;
   claimedBy: string | null; claimedAt: string | null; lastNote: string | null; createdAt: string; updatedAt: string;
+};
+
+export type OperationRecheck = {
+  operationId: string; status: string; recheckOperationId?: string; manualTaskId?: string; reused?: boolean;
 };

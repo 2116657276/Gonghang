@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from 'vue';
-import { api, type ApiError, yuan } from '../lib/api';
+import { requestOperationRecheck, api, type ApiError, yuan } from '../lib/api';
 import type { ManualTask, MerchantCancellation, MerchantCatalogItem, RefundBatch } from '../lib/types';
 import EmptyState from '../components/EmptyState.vue';
 import ManualTaskList from '../components/ManualTaskList.vue';
@@ -42,6 +42,7 @@ async function load() {
 }
 
 async function perform(action: () => Promise<void>) {
+  if (busy.value) return;
   busy.value = true;
   error.value = '';
   try { await action(); } catch (reason) { report(reason); } finally { busy.value = false; }
@@ -72,6 +73,13 @@ async function schedule(cancellationId: string) {
   });
 }
 
+async function recheckOperation(operationId: string) {
+  await perform(async () => {
+    notice.value = await requestOperationRecheck(operationId, '用户在商户工作台明确请求复核既有交易。');
+    await load();
+  });
+}
+
 async function claim(taskId: string) {
   await perform(async () => {
     await api(`/merchant/manual-tasks/${taskId}/actions`, { method: 'POST', body: JSON.stringify({ action: 'claim' }) });
@@ -98,12 +106,12 @@ onBeforeUnmount(() => { if (poller) window.clearInterval(poller); });
 <template>
   <p v-if="error" class="notice notice-error" role="alert">{{ error }}</p>
   <p v-else-if="notice" class="notice" role="status">{{ notice }}</p>
-  <p class="scope-note">这里执行的规则、退款批次和复核任务均属于<strong>本地模拟环境</strong>；商户入口不提供手工填写资金成功的能力。</p>
+  <p class="scope-note">此处仅处理本测试商户的交易；退款批次标明模拟或沙箱环境，复核受理后仍须等待明确结果。</p>
   <div v-if="loading" class="ledger-section" role="status" aria-busy="true">正在读取商户工作区……</div>
   <div v-else class="merchant-dashboard">
     <MerchantRulePanel :items="catalog" :busy="busy" @update="updateRule" />
-    <MerchantCancellationQueue :cancellations="cancellations" :batches="batches" :busy="busy" @decide="decide" @schedule="schedule" />
-    <ManualTaskList :tasks="tasks.filter((task) => task.state !== 'resolved')" :busy="busy" @claim="claim" @record="record" />
+    <MerchantCancellationQueue :cancellations="cancellations" :batches="batches" :busy="busy" @decide="decide" @schedule="schedule" @recheck="recheckOperation" />
+    <ManualTaskList :tasks="tasks.filter((task) => task.state !== 'resolved')" :busy="busy" @claim="claim" @record="record" @recheck="recheckOperation" />
     <section v-if="orders.length" class="ledger-section merchant-orders" aria-labelledby="merchant-orders-title">
       <div class="section-title"><div><p class="eyebrow">本测试商户</p><h2 id="merchant-orders-title">订单看板</h2></div></div>
       <div class="order-table" role="table" aria-label="本商户订单">

@@ -29,6 +29,7 @@ const { claimNextJob, processClaimedJob } = await import('./worker-runtime.js');
 const { createAssistantMessageEventStream } = await import('@earendil-works/pi-ai');
 const { appendEvent } = await import('./events.js');
 const { watchAgentOrder } = await import('./agent-events.js');
+const { readOnlyAgentTools } = await import('./agent-tools.js');
 
 type User = { id: string; email: string; displayName: string; role: 'consumer' | 'merchant_admin' };
 
@@ -281,5 +282,199 @@ test('确认恢复建单、模拟付款和只读事实恢复全链路不重复',
     assert.equal((await pool.query('SELECT payment_status FROM orders WHERE id=$1', [created.id])).rows[0].payment_status, 'paid');
     assert.equal((await pool.query('SELECT count(*)::int AS n FROM orders WHERE plan_id=$1', [f.planId])).rows[0].n, 1);
     assert.equal((await pool.query("SELECT count(*)::int AS n FROM agent_wakeups WHERE parent_run_id=$1 AND event_key LIKE 'confirmation:%'", [parent.runId])).rows[0].n, 1);
+  } finally { await app.close(); }
+});
+
+// Use the real Pi tool loop with deterministic responses; no external model or payment calls.
+function scriptedTools(steps: Array<{ name: string; arguments: Record<string, unknown>; error?: RegExp }>) {
+  let call = 0;
+  const stream: import('@earendil-works/pi-agent-core').StreamFn = (model, context) => {
+    if (call > 0 && call <= steps.length) {
+      const result = context.messages.at(-1);
+      assert.equal(result?.role, 'toolResult');
+      if (result?.role === 'toolResult') {
+        const expected = steps[call - 1]!;
+        assert.equal(Boolean(result.isError), Boolean(expected.error), JSON.stringify(result.content));
+        if (expected.error) assert.match(JSON.stringify(result.content), expected.error);
+      }
+    }
+    const step = steps[call++];
+    const response = createAssistantMessageEventStream();
+    response.push({ type: 'done', reason: step ? 'toolUse' : 'stop', message: {
+      role: 'assistant', api: model.api, provider: model.provider, model: model.id, timestamp: Date.now(), stopReason: step ? 'toolUse' : 'stop',
+      content: step ? [{ type: 'toolCall', id: `step-${call}`, name: step.name, arguments: step.arguments }]
+        : [{ type: 'text', text: '已读取本地业务结果；受理不代表渠道交易成功。' }],
+      usage: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, totalTokens: 15, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+    } });
+    return response;
+  };
+  return { stream, completed: () => assert.equal(call, steps.length + 1) };
+}
+
+test('T10 普通消息经 Pi 复核：有效授权合并重复请求，撤回与跨计划拒绝，默认读取不写任务', async () => {
+  const f = await watchedFixture('pending', 'created', true);
+  const foreign = await watchedFixture('pending', 'created', true);
+  const confirmation = (await pool.query('SELECT confirmation_id FROM orders WHERE id=$1', [f.orderId])).rows[0];
+  const authorizationId = randomUUID();
+  await pool.query(`INSERT INTO authorizations (id,plan_id,owner_id,confirmation_id,type,scope,expires_at)
+    VALUES ($1,$2,$3,$4,'query',$5,now()+interval '1 day')`,
+    [authorizationId, f.planId, f.user.id, confirmation.confirmation_id, { orderIds: [f.orderId] }]);
+  const input = '请重新核验当前订单的交易结果';
+  const run = await startAgentRun(f.user, f.planId, randomUUID(), input);
+  const script = scriptedTools([
+    { name: 'get_plan_orders', arguments: {} },
+    { name: 'get_operation_status', arguments: { id: f.operationId!, requestRecheck: true } },
+    { name: 'get_operation_status', arguments: { id: f.operationId!, requestRecheck: true } },
+    { name: 'get_operation_status', arguments: { id: foreign.operationId!, requestRecheck: true }, error: /未找到/ },
+  ]);
+  await executeAgentRun(run.runId, f.planId, f.user, input, new AbortController().signal, script.stream);
+  script.completed();
+  assert.equal((await readAgentRun(f.user, run.runId)).state, 'COMPLETED');
+  assert.equal((await pool.query('SELECT count(*)::int AS n FROM manual_tasks WHERE operation_id=$1', [f.operationId])).rows[0].n, 1);
+  assert.equal((await pool.query('SELECT count(*)::int AS n FROM manual_tasks WHERE operation_id=$1', [foreign.operationId])).rows[0].n, 0);
+  assert.equal((await pool.query('SELECT count(*)::int AS n FROM agent_tool_calls WHERE run_id=$1', [run.runId])).rows[0].n, 2);
+  assert.equal((await pool.query('SELECT count(*)::int AS n FROM agent_run_operations WHERE run_id=$1', [run.runId])).rows[0].n, 1);
+
+  await pool.query("UPDATE authorizations SET status='revoked' WHERE id=$1", [authorizationId]);
+  await pool.query('UPDATE agent_rate_limits SET tokens=2,updated_at=now() WHERE owner_id=$1', [f.user.id]);
+  const revokedRun = await startAgentRun(f.user, f.planId, randomUUID(), input);
+  const revokedScript = scriptedTools([
+    { name: 'get_operation_status', arguments: { id: f.operationId!, requestRecheck: true }, error: /查询授权已撤回或过期/ },
+    { name: 'get_operation_status', arguments: { id: f.operationId! } },
+  ]);
+  await executeAgentRun(revokedRun.runId, f.planId, f.user, input, new AbortController().signal, revokedScript.stream);
+  revokedScript.completed();
+  assert.equal((await readAgentRun(f.user, revokedRun.runId)).state, 'COMPLETED');
+  assert.equal((await pool.query('SELECT count(*)::int AS n FROM agent_tool_calls WHERE run_id=$1', [revokedRun.runId])).rows[0].n, 0);
+  assert.equal((await pool.query('SELECT count(*)::int AS n FROM manual_tasks WHERE operation_id=$1', [f.operationId])).rows[0].n, 1);
+  assert.equal((await pool.query('SELECT payment_status,reserved_minor FROM orders WHERE id=$1', [f.orderId])).rows[0].reserved_minor, 88000);
+});
+
+test('Pi 变更确认至商户善后连续链：A 保留、B 分批退款、C 关单、D 停止，重复提交不重复执行', async () => {
+  const app = await buildApp();
+  try {
+    await pool.query('DELETE FROM agent_wakeups');
+    await pool.query("UPDATE jobs SET next_run_at=now()+interval '1 day'");
+    const f = await fixture(4);
+    const [a, b, c, d] = f.items;
+    await pool.query("UPDATE catalog_items SET cancellation_rule='two_batches' WHERE id=$1", [b!.catalogId]);
+    await pool.query("UPDATE catalog_items SET simulation_mode='PENDING' WHERE id=$1", [c!.catalogId]);
+    const purchase = await transaction(client => createPurchaseProposal(client, f.user, f.planId, { itemIds: [a!.id, b!.id, c!.id] }));
+    const confirmedPurchase = await confirm(app, f.user, purchase.proposalId, purchase.version, [a!.id, b!.id, c!.id]);
+    const orderIds: string[] = [];
+    for (const item of [a!, b!, c!]) {
+      const order = await transaction(client => createConfirmedOrder(client, f.user, { confirmationId: confirmedPurchase.confirmationId, planItemId: item.id }));
+      orderIds.push(order.orderId);
+      const job = await claimNextJob();
+      assert.equal(job?.operation_id, order.operationId);
+      await processClaimedJob(job!);
+    }
+    const consumer = await createSession(f.user.id);
+    const merchant = await createSession(f.merchant.id);
+    const write = (url: string, payload: object, token = consumer.token, key = randomUUID()) => app.inject({
+      method: 'POST', url, payload, cookies: { xingzhi_session: token },
+      headers: { origin: config.webOrigin, 'idempotency-key': key },
+    });
+    const input = '保留住宿A，取消住宿B，关闭住宿C的未付订单，停止住宿D';
+    const parent = await startAgentRun(f.user, f.planId, randomUUID(), input);
+    const draftScript = scriptedTools([{ name: 'propose_change', arguments: { items: [
+      { planItemId: a!.id, intent: 'keep' }, { planItemId: b!.id, intent: 'cancel' },
+      { planItemId: c!.id, intent: 'close' }, { planItemId: d!.id, intent: 'stop' },
+    ] } }]);
+    await executeAgentRun(parent.runId, f.planId, f.user, input, new AbortController().signal, draftScript.stream);
+    const parentRun = await readAgentRun(f.user, parent.runId);
+    assert.equal(parentRun.state, 'WAITING_USER');
+    const draft = parentRun.proposal!;
+    const confirmation = await write(`/api/change-proposals/${draft.proposalId}/confirm`, {
+      expectedVersion: draft.version, acceptedFeeMinor: 8000, acceptedRefundMinor: 80000,
+      aftercareOrderIds: [orderIds[1], orderIds[2]], queryOrderIds: [orderIds[1], orderIds[2]],
+    });
+    assert.equal(confirmation.statusCode, 201, confirmation.body);
+    assert.equal(confirmation.json().agentFollowupQueued, true);
+    const snapshotTool = readOnlyAgentTools(f.user, f.planId, async () => {}).find(tool => tool.name === 'get_plan_orders')!;
+    const toolSnapshot = await snapshotTool.execute('check-display', {});
+    const data = JSON.parse((toolSnapshot.content[0] as { text: string }).text).data;
+    assert.deepEqual(data.displayAmounts.budget, { limit: '¥3000.00', netSpent: '¥1760.00', reserved: '¥880.00', remaining: '¥360.00' });
+    assert.deepEqual(data.confirmedActions.find((action: { type: string }) => action.type === 'change').submitChangeInput, { id: draft.proposalId });
+    const recovery = await claimAgentWakeup();
+    assert.ok(recovery);
+    const executeScript = scriptedTools([
+      { name: 'get_plan_orders', arguments: {} },
+      { name: 'submit_change', arguments: { id: draft.proposalId } },
+      { name: 'submit_change', arguments: { id: draft.proposalId } },
+    ]);
+    await executeAgentRun(recovery.runId, f.planId, f.user, recovery.input, new AbortController().signal, executeScript.stream);
+    executeScript.completed();
+    assert.equal((await readAgentRun(f.user, recovery.runId)).state, 'WAITING_EXTERNAL');
+    const requests = (await pool.query('SELECT id,status FROM cancellation_requests WHERE order_id=$1', [orderIds[1]])).rows;
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].status, 'approved');
+    const refundUrl = `/api/merchant/cancellations/${requests[0].id}/refund-batches`;
+    assert.equal((await write(refundUrl, {})).statusCode, 403);
+    const close = await claimNextJob();
+    assert.equal(close?.type, 'simulate_close');
+    assert.equal(close?.entity_id, orderIds[2]);
+    await processClaimedJob(close!);
+    for (let batchNumber = 1; batchNumber <= 2; batchNumber++) {
+      const key = randomUUID();
+      const scheduled = await write(refundUrl, {}, merchant.token, key);
+      assert.equal(scheduled.statusCode, 202, scheduled.body);
+      assert.equal(scheduled.json().batch.batchNumber, batchNumber);
+      assert.equal(scheduled.json().batch.amountMinor, 40000);
+      assert.deepEqual((await write(refundUrl, {}, merchant.token, key)).json(), scheduled.json());
+      const job = await claimNextJob();
+      assert.equal(job?.operation_id, scheduled.json().batch.operationId);
+      await processClaimedJob(job!);
+      const snapshot = await app.inject({ method: 'GET', url: `/api/plans/${f.planId}`, cookies: { xingzhi_session: consumer.token } });
+      assert.equal(snapshot.statusCode, 200);
+      assert.equal(snapshot.json().cancellations[0].refundedMinor, batchNumber * 40000);
+      assert.equal(snapshot.json().cancellations[0].batches.length, batchNumber);
+      assert.ok(snapshot.json().cancellations[0].batches[batchNumber - 1].operationId);
+      if (batchNumber === 1) assert.equal(snapshot.json().cancellations[0].status, 'refund_processing');
+    }
+    const snapshot = (await app.inject({ method: 'GET', url: `/api/plans/${f.planId}`, cookies: { xingzhi_session: consumer.token } })).json();
+    assert.equal(snapshot.orders.find((order: { id: string }) => order.id === orderIds[0]).paymentStatus, 'paid');
+    assert.equal(snapshot.orders.find((order: { id: string }) => order.id === orderIds[0]).refundedMinor, 0);
+    assert.equal(snapshot.orders.find((order: { id: string }) => order.id === orderIds[1]).status, 'cancelled');
+    assert.equal(snapshot.orders.find((order: { id: string }) => order.id === orderIds[2]).paymentStatus, 'closed');
+    assert.equal(snapshot.items.find((item: { id: string }) => item.id === d!.id).status, 'stopped');
+    assert.equal(snapshot.orders.length, 3);
+    assert.equal(snapshot.budget.paidMinor, 96000);
+    assert.equal(snapshot.budget.reservedMinor, 0);
+    assert.equal((await pool.query('SELECT count(*)::int AS n FROM agent_order_watches WHERE run_id=$1 AND active', [recovery.runId])).rows[0].n, 0);
+    assert.equal((await readAgentRun(f.user, recovery.runId)).state, 'COMPLETED');
+
+    // Finish the confirmation queue item, then consume the queued business facts read-only.
+    await pool.query("UPDATE agent_wakeups SET next_run_at=now()-interval '1 second' WHERE run_id=$1", [recovery.runId]);
+    await claimAgentWakeup();
+    let explained = 0;
+    for (let attempt = 0; attempt < 12; attempt++) {
+      const pending = await pool.query("SELECT 1 FROM agent_wakeups WHERE state IN ('pending','dispatched')");
+      if (!pending.rowCount) break;
+      await pool.query("UPDATE agent_wakeups SET next_run_at=now()-interval '1 second' WHERE state IN ('pending','dispatched')");
+      await pool.query('UPDATE agent_rate_limits SET tokens=2,updated_at=now() WHERE owner_id=$1', [f.user.id]);
+      const fact = await claimAgentWakeup();
+      if (!fact) continue;
+      const readonlyScript = scriptedTools([
+        { name: 'get_plan_orders', arguments: {} },
+        { name: 'get_operation_status', arguments: { id: close!.operation_id, requestRecheck: true }, error: /requestRecheck|unexpected|Unexpected|额外/ },
+      ]);
+      await executeAgentRun(fact.runId, f.planId, f.user, fact.input, new AbortController().signal, readonlyScript.stream);
+      readonlyScript.completed();
+      assert.equal((await readAgentRun(f.user, fact.runId)).state, 'COMPLETED');
+      explained++;
+    }
+    assert.ok(explained > 0);
+    assert.equal((await pool.query("SELECT count(*)::int AS n FROM agent_wakeups WHERE state IN ('pending','dispatched')")).rows[0].n, 0);
+    assert.equal((await pool.query('SELECT count(*)::int AS n FROM manual_tasks WHERE plan_id=$1', [f.planId])).rows[0].n, 0);
+    assert.equal((await pool.query('SELECT count(*)::int AS n FROM refund_batches WHERE cancellation_request_id=$1', [requests[0].id])).rows[0].n, 2);
+    const refundOperationId = snapshot.cancellations[0].batches[1].operationId;
+    const rechecked = await write(`/api/operations/${refundOperationId}/rechecks`, { reason: '消费者请求复核第二笔退款' });
+    assert.equal(rechecked.statusCode, 202, rechecked.body);
+    const refreshed = (await app.inject({ method: 'GET', url: `/api/plans/${f.planId}`, cookies: { xingzhi_session: consumer.token } })).json();
+    assert.equal(refreshed.cancellations[0].manualTasks[0].id, rechecked.json().manualTaskId);
+    assert.equal(refreshed.cancellations[0].manualTasks[0].state, 'open');
+    assert.equal(refreshed.cancellations[0].refundedMinor, 80000);
+
   } finally { await app.close(); }
 });

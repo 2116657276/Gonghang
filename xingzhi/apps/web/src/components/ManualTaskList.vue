@@ -5,7 +5,7 @@ import { dateTime } from '../lib/api';
 import StatusPill from './StatusPill.vue';
 
 defineProps<{ tasks: ManualTask[]; busy?: boolean }>();
-const emit = defineEmits<{ claim: [id: string]; record: [id: string, note: string] }>();
+const emit = defineEmits<{ claim: [id: string]; record: [id: string, note: string]; recheck: [operationId: string] }>();
 const notes = reactive<Record<string, string>>({});
 </script>
 
@@ -17,6 +17,7 @@ const notes = reactive<Record<string, string>>({});
         <header><strong>{{ task.type }}</strong><StatusPill :value="task.state" /></header>
         <p>{{ task.reason }}</p>
         <p class="muted">下一步：{{ task.nextAction }}</p>
+        <button v-if="task.operationId" class="secondary-button" type="button" :disabled="busy" @click="emit('recheck', task.operationId)">按原交易请求复核</button>
         <small>计划复核：{{ dateTime(task.nextReviewAt) }}</small>
         <button v-if="task.state === 'open'" class="secondary-button" type="button" :disabled="busy" @click="emit('claim', task.id)">领取任务</button>
         <div v-else-if="task.state === 'claimed'" class="manual-note">

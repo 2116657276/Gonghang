@@ -112,6 +112,7 @@ export type PlanSnapshot = {
     updatedAt: string;
     batches: Array<{
       id: string;
+      operationId: string | null;
       batchNumber: number;
       amountMinor: number;
       status: string;

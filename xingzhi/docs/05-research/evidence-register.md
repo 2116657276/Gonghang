@@ -3,14 +3,14 @@
 | 字段 | 内容 |
 | --- | --- |
 | 文档编号 | XZ-EVIDENCE |
-| 更新日期 | 2026-09-11 |
-| 状态 | 已核对 Pi 官方发行版、核心包与 DeepSeek v4 flash 的公开资料并锁定 S4 选型；两个 Pi 包已安装，类型检查、本地确定性工具循环、真实只读／方案联调和费用账本有历史证据，429 退避另有本地受控切片记录；2026-09-11 已恢复开发，交易执行工具与事件恢复已接入并作局部行为核对，本轮实现与检查结果以开发计划 1.8 为准，S4／S5 未放行 |
+| 更新日期 | 2026-09-12 |
+| 状态 | 已核对 Pi 官方发行版、核心包与 DeepSeek v4 flash 的公开资料并锁定 S4 选型；两个 Pi 包已安装，类型检查、本地确定性工具循环、真实只读／方案联调、局部执行评测和费用账本有证据，429 退避另有本地受控切片记录；交易执行工具、事件恢复、T10 复核和变更善后连续链已作本地受控核对，本轮实现与检查结果以开发计划 1.8—1.10 为准，S4／S5 未放行 |
 
 ## 一、证据台账
 
 | 编号 | 来源 | 支持的有限结论 | 核对与限制 |
 | --- | --- | --- | --- |
-| EV-01 | [Pi v0.85.1 发布页](https://github.com/earendil-works/pi/releases/tag/v0.85.1)、[核心包清单](https://github.com/earendil-works/pi/blob/main/packages/agent/package.json)、[核心包说明](https://github.com/earendil-works/pi/blob/main/packages/agent/README.md) | 官方最新发行版为 v0.85.1；`@earendil-works/pi-agent-core` 与 `@earendil-works/pi-ai` 可作为嵌入式 Agent 核心，核心包要求 Node `>=22.19.0`，许可证为 MIT | 2026-09-08 按官方 releases、package.json 与 README 核对；两个包已精确安装，Node、类型检查、本地确定性循环和真实只读／方案联调通过；交易执行工具与事件恢复已有局部行为证据，完整取消／恢复仍未验证 |
+| EV-01 | [Pi v0.85.1 发布页](https://github.com/earendil-works/pi/releases/tag/v0.85.1)、[核心包清单](https://github.com/earendil-works/pi/blob/main/packages/agent/package.json)、[核心包说明](https://github.com/earendil-works/pi/blob/main/packages/agent/README.md) | 官方最新发行版为 v0.85.1；`@earendil-works/pi-agent-core` 与 `@earendil-works/pi-ai` 可作为嵌入式 Agent 核心，核心包要求 Node `>=22.19.0`，许可证为 MIT | 2026-09-08 按官方 releases、package.json 与 README 核对；两个包已精确安装，Node、类型检查、本地确定性循环和真实只读／方案联调通过；交易执行工具、事件恢复、T10 复核和变更善后连续链已有局部行为证据，完整真实模型／官方取消与恢复仍未验证 |
 | EV-09 | [DeepSeek API 总览](https://api-docs.deepseek.com/)、[模型与价格](https://api-docs.deepseek.com/quick_start/pricing/) | 使用 OpenAI 兼容基地址 `https://api.deepseek.com` 和模型标识 `deepseek-v4-flash`；当前文档列出的模型版本为 `DeepSeek-V4-Flash-0731`，支持工具调用 | 2026-09-08 重新核对公开文档；本项目现已配置本机密钥，真实只读烟测通过；完整业务 Agent 仍待验收 |
 | EV-10 | [DeepSeek 价格表](https://api-docs.deepseek.com/quick_start/pricing/) | 价格按输入／输出 token 和高峰／低峰时段计费，官方明确提示价格可能调整；项目费用上限以本地人民币账本为准，不把美元单价直接写成固定人民币额度 | 价格只用于估算和账本核对；接入时必须记录实际响应 usage、人民币费率版本和账本余额，预算不足时拒绝新调用 |
 | EV-11 | [DeepSeek 限流与隔离](https://api-docs.deepseek.com/quick_start/rate_limit/)、[错误码](https://api-docs.deepseek.com/quick_start/error_codes/) | 官方说明并发上限按账号及模型计算，超限返回 429；`user_id` 可用于业务侧隔离；429 不能被当成业务成功 | 项目采用更保守的服务端令牌桶和单计划并发 1；如响应带 `Retry-After` 则遵守，否则使用本地退避；本地限流不是 DeepSeek 账号额度承诺 |

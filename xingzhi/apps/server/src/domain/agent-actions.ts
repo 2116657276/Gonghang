@@ -110,7 +110,9 @@ export async function executeAgentAction(user:AuthUser,planId:string,runId:strin
       if(!(await client.query('SELECT 1 FROM operations WHERE id=$1 AND plan_id=$2 AND owner_id=$3',[id,planId,user.id])).rowCount)notFound();
       const recheck=await requestOperationRecheck(client,user,id,{reason:'用户通过助手请求核对已有操作的最新事实。'});
       operationIds.push('recheckOperationId' in recheck && typeof recheck.recheckOperationId==='string'?recheck.recheckOperationId:id);
-      result={...recheck,message:'复核已受理，请查看关联操作或人工任务；受理不代表渠道已核验成功。'};
+      result={...recheck,message:'manualTaskId' in recheck
+        ?'本地模拟交易复核已交由本订单商户人工跟进，没有发起官方渠道查询；既有模拟退款事实保持不变。'
+        :'复核已受理，请查看关联操作；受理不代表渠道已核验成功。'};
     }
     for(const operationId of operationIds)await client.query('INSERT INTO agent_run_operations(run_id,operation_id) VALUES($1,$2) ON CONFLICT DO NOTHING',[runId,operationId]);
     await client.query('UPDATE agent_tool_calls SET response_payload=$3 WHERE run_id=$1 AND tool_call_id=$2',[runId,callId,result]);
