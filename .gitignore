@@ -20,6 +20,7 @@ coverage/
 *.cer
 secrets/
 credentials/
+.local-secrets/
 
 # 本地数据、导出与日志
 *.sqlite

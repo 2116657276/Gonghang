@@ -3,8 +3,8 @@
 | 字段 | 内容 |
 | --- | --- |
 | 文档编号 | XZ-EVIDENCE |
-| 更新日期 | 2026-09-12 |
-| 状态 | 历史已核对旧 DeepSeek V4 Flash 资料与证据；2026-09-12 已切换到 DeepSeek V4.1 Flash 官方 API 标识 `deepseek-flash`（用户简称“ds4.1flash”），并重新核对价格、运行准入与请求体。两个 Pi 包已安装，类型检查、本地确定性工具循环、旧模型真实只读／方案联调、局部执行评测和费用账本有证据，429 退避另有本地受控切片记录；交易执行工具、事件恢复、T10 复核和变更善后连续链已作本地受控核对，本轮实现与检查结果以开发计划为准，S4／S5 未放行 |
+| 更新日期 | 2026-09-13 |
+| 状态 | 历史已核对旧 DeepSeek V4 Flash 资料与证据；DeepSeek V4.1 Flash 当前官方 API 标识为 `deepseek-flash`（用户简称“ds4.1flash”），价格、运行准入、请求体、固定场景及进程／授权连续样本已有核对。交易执行工具、事件恢复、T10 复核、变更善后连续链和 1.3／1.4 恢复准备已作本地受控核对；按用户要求暂停开发，官方渠道、多场景稳定性和 S4／S5 未放行 |
 
 ## 一、证据台账
 
@@ -14,8 +14,8 @@
 | EV-09 | [DeepSeek API 总览](https://api-docs.deepseek.com/)、[模型与价格](https://api-docs.deepseek.com/quick_start/pricing/) | 历史核对得到 OpenAI 兼容基地址 `https://api.deepseek.com` 和模型标识 `deepseek-v4-flash`；当时文档列出的模型版本为 `DeepSeek-V4-Flash-0731`，支持工具调用 | 2026-09-08 重新核对公开文档；该条证据对应旧模型，不能直接证明当前 `deepseek-flash` 可用；完整业务 Agent 仍待验收 |
 | EV-10 | [DeepSeek 价格表](https://api-docs.deepseek.com/quick_start/pricing/) | 价格按输入／输出 token 和高峰／低峰时段计费，官方明确提示价格可能调整；项目费用上限以本地人民币账本为准，不把美元单价直接写成固定人民币额度 | 价格只用于估算和账本核对；接入时必须记录实际响应 usage、人民币费率版本和账本余额，预算不足时拒绝新调用 |
 | EV-11 | [DeepSeek 限流与隔离](https://api-docs.deepseek.com/quick_start/rate_limit/)、[错误码](https://api-docs.deepseek.com/quick_start/error_codes/) | 官方说明并发上限按账号及模型计算，超限返回 429；`user_id` 可用于业务侧隔离；429 不能被当成业务成功 | 项目采用更保守的服务端令牌桶和单计划并发 1；如响应带 `Retry-After` 则遵守，否则使用本地退避；本地限流不是 DeepSeek 账号额度承诺 |
-| EV-12 | [DeepSeek V4.1 Flash 发布说明](https://deepseek.com/news/deepseek-v4-1-flash/)、[官方模型与价格](https://api-docs.deepseek.com/zh-cn/quick_start/pricing/) | DeepSeek V4.1 Flash 的官方 OpenAI API 标识为 `deepseek-flash`，支持 Tool Calls；峰值费率为缓存命中 0.04 元、未命中 2 元、输出 8 元／百万 token | 2026-09-12 重新核对官方资料；`.env`、`.env.example`、运行准入、Pi 模型对象、烟测入口、请求体夹具和费率实现已同步；未发起新的真实付费烟测，旧 `deepseek-v4-flash` 运行记录保持历史属性 |
-| EV-13 | 本次模型配置与调用链变更 | `.env` 与 `.env.example` 的 `DEEPSEEK_MODEL` 已切换为 `deepseek-flash`；本地 429 请求夹具已断言请求体使用 `deepseek-flash`，模型费率与结算计算同步更新 | 2026-09-12；本轮未发起真实付费调用；新模型业务效果与完整交易链仍待验收 |
+| EV-12 | [DeepSeek V4.1 Flash 发布说明](https://deepseek.com/news/deepseek-v4-1-flash/)、[官方模型与价格](https://api-docs.deepseek.com/zh-cn/quick_start/pricing/) | DeepSeek V4.1 Flash 的官方 OpenAI API 标识为 `deepseek-flash`，支持 Tool Calls；峰值费率为缓存命中 0.04 元、未命中 2 元、输出 8 元／百万 token | 2026-09-12 重新核对官方资料；`.env`、`.env.example`、运行准入、Pi 模型对象、烟测入口、请求体夹具和费率实现已同步；切换核对当日未发起新的真实付费烟测，后续当前模型固定场景与进程／授权连续评测见验证记录第十八至十九节，旧 `deepseek-v4-flash` 运行记录保持历史属性 |
+| EV-13 | 本次模型配置与调用链变更 | `.env` 与 `.env.example` 的 `DEEPSEEK_MODEL` 已切换为 `deepseek-flash`；本地 429 请求夹具已断言请求体使用 `deepseek-flash`，模型费率与结算计算同步更新 | 2026-09-12 切换核对；当日未发起真实付费调用，后续第十八至十九节补充当前模型固定场景与进程／授权连续证据；多场景业务效果和完整交易链仍待验收 |
 | EV-02 | [退款接口](https://aipay.alipay.com/docs/ai-web-app-payment-qianyi/api-list/alipay-trade-refund.md) | 商户按原单退款；重复请求保持退款号，调用成功不单独证明退款成功 | 本轮核对接口说明与关键字段；账号及沙箱未实测 |
 | EV-03 | [退款查询](https://aipay.alipay.com/docs/ai-web-app-payment-qianyi/api-list/alipay-trade-fastpay-refund-query.md) | 同请求查询退款状态；明确退款成功字段及查询等待建议 | 本轮核对说明与关键字段；未实测 |
 | EV-04 | [交易查询](https://aipay.alipay.com/docs/ai-web-app-payment-qianyi/api-list/alipay-trade-query.md) | 交易状态查询；关闭状态需结合付款退款历史解释 | 2026-09-06 使用脱敏临时订单号调用本项目沙箱网关，返回 `ACQ.TRADE_NOT_EXIST`；未核验真实订单状态 |
@@ -33,16 +33,16 @@
 | 沙箱账号、应用、买卖家与产品权限 | 已填入本机配置，未完成完整权限核验 | 继续按沙箱后台确认适用产品，不公开秘密值 |
 | 网页及设备付款体验、通知可达性 | 未验证 | 记录环境、设备、流程与结果 |
 | 同一订单付款退款闭环 | 未验证 | 原单、退款请求、金额、时间与渠道证据 |
-| Pi 依赖与模型兼容 | 两个 0.85.1 包已安装；Node、类型检查、本地确定性工具循环和真实只读／方案联调通过；交易执行工具与恢复已有局部行为证据 | 继续验证完整交易执行、取消与恢复语义；不把方案联调扩大为完整交易验收 |
-| DeepSeek API key、模型调用与费用 | 本机密钥已配置；既有真实只读／方案联调和人民币 usage 结算对应旧模型，新 `deepseek-flash` 的本地请求体、费率与预算计算已核对；新模型真实 usage 和完整业务交易调用未验证 | 仅由服务端读取 `DEEPSEEK_API_KEY`；真实调用继续记录响应 usage、费率版本、429 处理和预算拒绝 |
-| Agent 任务理解与恢复效果 | 未验证 | 固定案例集、模型条件、Pi 版本、提示词修订、失败与复测记录 |
+| Pi 依赖与模型兼容 | 两个 0.85.1 包已安装；Node、类型检查、本地确定性工具循环和真实只读／方案联调通过；交易执行工具、事件恢复与恢复准备已有局部行为证据 | 继续验证完整交易执行、取消与官方恢复语义；不把方案联调扩大为完整交易验收 |
+| DeepSeek API key、模型调用与费用 | 本机密钥已配置；旧模型真实只读／方案联调和人民币 usage 结算、当前 `deepseek-flash` 的请求体／费率／固定场景／进程／授权连续 usage 均有记录；完整业务交易调用未验证 | 仅由服务端读取 `DEEPSEEK_API_KEY`；继续记录响应 usage、费率版本、429 处理、未知费用预占和预算拒绝 |
+| Agent 任务理解与恢复效果 | 当前模型固定案例、进程中断及授权连续样本已有记录；多场景稳定性和用户理解度未验证 | 继续记录固定案例集、模型条件、Pi 版本、提示词修订、失败与复测结果 |
 | 用户需求与竞赛差异化 | 待访谈和实测 | 匿名需求证据、对照案例和自主贡献说明 |
 
 ## 三、登记规则
 
 来源链接、核对日期、支持结论、适用环境、核实等级和限制同时记录。联调记录须追加执行者角色、实际版本、环境、用例与脱敏证据位置。文档存在接口不表示用户账号有权调用，不表示运行成功，更不表示真实资金已经发生。
 
-本机 S2 适配使用 `alipay-sdk@4.14.0`，具体版本由项目锁文件固定；它用于生成交接、验签、查询、关单和受控退款调用。网关地址不在代码中推定，本机已用沙箱参数完成一次只读查单连通性核验；这不代表付款、退款、关单或通知联调完成。S4 的两个 Pi 包已安装并通过本地无资金确定性循环，历史 `deepseek-v4-flash` 真实只读烟测已通过；当前配置和调用链使用 DeepSeek V4.1 Flash 的官方标识 `deepseek-flash`，新模型尚未发起真实付费烟测，旧模型费率与证据不迁移。
+本机 S2 适配使用 `alipay-sdk@4.14.0`，具体版本由项目锁文件固定；它用于生成交接、验签、查询、关单和受控退款调用。网关地址不在代码中推定，本机已用沙箱参数完成一次只读查单连通性核验；这不代表付款、退款、关单或通知联调完成。S4 的两个 Pi 包已安装并通过本地无资金确定性循环，历史 `deepseek-v4-flash` 真实只读烟测已通过；当前配置和调用链使用 DeepSeek V4.1 Flash 的官方标识 `deepseek-flash`，当前模型固定场景、进程中断及授权连续评测已有记录，旧模型费率与证据不迁移。
 
 
 ## 2026-09-08 实施补证

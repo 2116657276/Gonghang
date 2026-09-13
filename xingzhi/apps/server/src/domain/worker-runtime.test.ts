@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
 import { randomUUID } from 'node:crypto';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
 import { readdir, readFile } from 'node:fs/promises';
 import { Pool } from 'pg';
 import { config } from '../config.js';
@@ -48,6 +50,7 @@ async function fixture(type: 'simulate_payment' | 'simulate_close' | 'simulate_r
     }
     return createOperationJob(client, {planId:ids.plan,ownerId:ids.user,type,entityId:type === 'simulate_refund_batch' ? ids.batch : ids.order,purpose:'automated_test'});
   });
+  if (type === 'simulate_refund_batch') await pool.query('UPDATE refund_batches SET operation_id=$2 WHERE id=$1',[ids.batch,operation]);
   return {...ids,operation};
 }
 
@@ -79,6 +82,39 @@ test('结果事务失败全部回滚；租约过期后接管；提交后重复�
   assert.equal(await processClaimedJob(replacement),false);
   assert.equal((await pool.query('SELECT refunded_minor FROM orders WHERE id=$1',[f.order])).rows[0].refunded_minor,40000);
   assert.equal((await pool.query('SELECT count(*)::int AS count FROM events WHERE plan_id=$1',[f.plan])).rows[0].count,1);
+});
+
+test('实际执行进程在领取后及提交后退出，重启复用原任务且只记账一次', async () => {
+  const f=await fixture('simulate_refund_batch');
+  const runChild=async (execute:boolean) => {
+    const script=`
+      const {config}=await import(${JSON.stringify(new URL('../config.js',import.meta.url).href)});
+      config.databaseUrl=process.env.RECOVERY_TEST_DATABASE;config.paymentMode='simulation';
+      const {claimNextJob,processClaimedJob}=await import(${JSON.stringify(new URL('./worker-runtime.js',import.meta.url).href)});
+      const job=await claimNextJob();
+      if(${execute}) await processClaimedJob(job);
+      process.send(job);setInterval(()=>{},1000);
+    `;
+    const child=spawn(process.execPath,['--import','tsx','--input-type=module','-e',script],{
+      env:{...process.env,RECOVERY_TEST_DATABASE:connection.toString()},stdio:['ignore','ignore','inherit','ipc'],
+    });
+    try {
+      const [job]=await once(child,'message',{signal:AbortSignal.timeout(10000)});
+      return job as NonNullable<Awaited<ReturnType<typeof claimNextJob>>>;
+    } finally {
+      const exited=once(child,'exit');child.kill('SIGKILL');await exited;
+    }
+  };
+  const old=await runChild(false);
+  assert.equal(old.operation_id,f.operation);
+  assert.equal((await pool.query('SELECT refunded_minor FROM orders WHERE id=$1',[f.order])).rows[0].refunded_minor,0);
+  await pool.query("UPDATE jobs SET lease_until=now()-interval '1 second' WHERE operation_id=$1",[f.operation]);
+  const committed=await runChild(true);
+  assert.equal(committed.operation_id,f.operation);
+  assert.equal(await processClaimedJob(old),false);
+  assert.equal(await processClaimedJob(committed),false);
+  assert.equal((await pool.query('SELECT refunded_minor FROM orders WHERE id=$1',[f.order])).rows[0].refunded_minor,40000);
+  assert.equal((await pool.query('SELECT count(*)::int AS n FROM events WHERE plan_id=$1',[f.plan])).rows[0].n,1);
 });
 
 test('两个执行者只领取一次；未知付款继续占用', async () => {
@@ -133,6 +169,60 @@ test('渠道退款只发送一次；中断后按固定退款号查询；成功�
   config.paymentMode='simulation';
 });
 
+test('关单响应丢失后只查原单，旧领取返回不能覆盖恢复结果',async()=>{
+  config.paymentMode='sandbox';
+  try {
+    const f=await sandboxFixture('sandbox_close');let closes=0;
+    const first=await readyJob(f.operation);
+    await processChannelJob(first,{...noNetwork,
+      async queryTrade(order:string){return {code:'10000',outTradeNo:order,totalAmount:'880.00',tradeStatus:'WAIT_BUYER_PAY'};},
+      async closeTrade(){closes++;throw new Error('response lost');},
+    });
+    await processChannelJob(await readyJob(f.operation),{...noNetwork,
+      async queryTrade(order:string){return {code:'10000',outTradeNo:order,totalAmount:'880.00',tradeStatus:'WAIT_BUYER_PAY'};},
+      async closeTrade(){closes++;throw new Error('must not resend');},
+    });
+    assert.equal(closes,1);
+    assert.equal((await pool.query('SELECT reserved_minor FROM orders WHERE id=$1',[f.order])).rows[0].reserved_minor,88000);
+    let release!:()=>void;
+    let entered!:()=>void;
+    const started=new Promise<void>(resolve=>{entered=resolve;});
+    const barrier=new Promise<void>(resolve=>{release=resolve;});
+    const old=await readyJob(f.operation);
+    const late=processChannelJob(old,{...noNetwork,async queryTrade(order:string){
+      entered();await barrier;
+      return {code:'10000',outTradeNo:order,totalAmount:'880.00',tradeStatus:'TRADE_SUCCESS'};
+    }});
+    await started;
+    await processChannelJob(await readyJob(f.operation),{...noNetwork,async queryTrade(order:string){
+      return {code:'10000',outTradeNo:order,totalAmount:'880.00',tradeStatus:'TRADE_CLOSED'};
+    }});
+    release();await late;
+    assert.deepEqual((await pool.query('SELECT payment_status,reserved_minor FROM orders WHERE id=$1',[f.order])).rows[0],{payment_status:'closed',reserved_minor:0});
+    assert.equal((await pool.query('SELECT state FROM operations WHERE id=$1',[f.operation])).rows[0].state,'succeeded');
+  } finally {config.paymentMode='simulation';}
+});
+
+test('退款显式复核成功同步解决原批次人工待办，重复复核不重复累计',async()=>{
+  config.paymentMode='sandbox';
+  try {
+    const f=await sandboxFixture();
+    await pool.query("UPDATE operations SET created_at=now()-interval '31 minutes' WHERE id=$1",[f.operation]);
+    await processChannelJob(await readyJob(f.operation),noNetwork);
+    assert.equal((await pool.query('SELECT state FROM manual_tasks WHERE refund_batch_id=$1',[f.batch])).rows[0].state,'open');
+    const recheck=await transaction(client=>createOperationJob(client,{planId:f.plan,ownerId:f.user,type:'sandbox_refund_recheck',entityId:f.batch,purpose:'merchant_query:test'}));
+    const adapter={...noNetwork,async queryRefund(order:string,refund:string){
+      return {code:'10000',outTradeNo:order,outRequestNo:refund,refundAmount:'400.00',refundStatus:'REFUND_SUCCESS'};
+    }};
+    await processChannelJob(await readyJob(recheck),adapter);
+    assert.equal((await pool.query('SELECT state FROM manual_tasks WHERE refund_batch_id=$1',[f.batch])).rows[0].state,'resolved');
+    assert.equal((await pool.query('SELECT state FROM operations WHERE id=$1',[f.operation])).rows[0].state,'succeeded');
+    const again=await transaction(client=>createOperationJob(client,{planId:f.plan,ownerId:f.user,type:'sandbox_refund_recheck',entityId:f.batch,purpose:'merchant_query:again'}));
+    await processChannelJob(await readyJob(again),adapter);
+    assert.equal((await pool.query('SELECT refunded_minor FROM orders WHERE id=$1',[f.order])).rows[0].refunded_minor,40000);
+  } finally {config.paymentMode='simulation';}
+});
+
 test('关单先核对；付款竞争转人工且不退款；未知查询保留占用',async()=>{
   config.paymentMode='sandbox';
   const f=await sandboxFixture('sandbox_close');let closes=0;
@@ -158,6 +248,27 @@ test('已关单后到达付款观察不会重新打开订单',async()=>{
   assert.deepEqual(order,{payment_status:'closed',status:'cancelled'});
   assert.equal((await pool.query('SELECT state FROM operations WHERE id=$1',[f.operation])).rows[0].state,'pending_review');
   config.paymentMode='simulation';
+});
+
+test('渠道已结束交易在商户入口及发送前阻止普通退款，保留人工责任',async()=>{
+  config.paymentMode='sandbox';
+  const saved={...config.alipaySandbox};
+  try {
+    const f=await sandboxFixture();
+    await pool.query("UPDATE payment_attempts SET provider_status='TRADE_FINISHED' WHERE order_id=$1",[f.order]);
+    const session=await createSession(f.merchant);
+    // Readiness only validates presence here; no network call is made.
+    Object.assign(config.alipaySandbox,{appId:'test',privateKey:'test',publicKey:'test',sellerId:'test',gateway:'https://openapi-sandbox.dl.alipaydev.com/gateway.do',returnUrl:'http://localhost:5173/payment-return'});
+    const response=await app.inject({method:'POST',url:`/api/merchant/cancellations/${f.cancellation}/refund-batches`,cookies:{xingzhi_session:session.token},headers:{origin:config.webOrigin,'idempotency-key':randomUUID()},payload:{}});
+    assert.equal(response.statusCode,422,response.body);
+    assert.equal(response.json().error,'TRADE_FINISHED');
+    let calls=0;
+    await processChannelJob(await readyJob(f.operation),{...noNetwork,async refund(){calls++;throw new Error('must not send');}});
+    assert.equal(calls,0);
+    const task=(await pool.query('SELECT state,reason FROM manual_tasks WHERE operation_id=$1',[f.operation])).rows[0];
+    assert.equal(task.state,'open');assert.match(task.reason,/交易已结束/);
+    assert.equal((await pool.query('SELECT refunded_minor FROM orders WHERE id=$1',[f.order])).rows[0].refunded_minor,0);
+  }finally{Object.assign(config.alipaySandbox,saved);config.paymentMode='simulation';}
 });
 
 test('已过期且未发送的善后授权不触发渠道调用',async()=>{

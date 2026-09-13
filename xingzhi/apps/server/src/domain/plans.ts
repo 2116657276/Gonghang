@@ -31,7 +31,7 @@ type AuthorizationRow = {
   id: string;
   type: 'purchase' | 'aftercare' | 'query';
   status: string;
-  scope: { orderIds?: string[] };
+  scope: { itemIds?: string[]; orderIds?: string[] };
   expires_at: Date;
 };
 
@@ -123,7 +123,9 @@ export async function planSnapshot(client: PoolClient, planId: string, user: Aut
     authorizations: authorizationsResult.rows.map((authorization) => ({
       id: authorization.id,
       type: authorization.type,
-      status: authorization.status,
+      status: authorization.status === 'active' && authorization.expires_at.getTime() <= Date.now()
+        ? 'expired' : authorization.status,
+      itemIds: authorization.scope.itemIds ?? [],
       orderIds: Array.isArray(authorization.scope?.orderIds) ? authorization.scope.orderIds : [],
       expiresAt: authorization.expires_at.toISOString(),
     })),

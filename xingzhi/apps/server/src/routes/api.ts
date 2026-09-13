@@ -1087,6 +1087,9 @@ export async function registerApi(app: FastifyInstance) {
         throw new AppError(422, 'EXTERNAL_REFUND_NOT_READY', '沙箱退款配置或订单环境尚未就绪。');
       }
       if (!isSandbox && cancellation.provider !== 'simulation') throw new AppError(422, 'PAYMENT_ENVIRONMENT_MISMATCH', '退款环境不一致。');
+      if (isSandbox && (await client.query("SELECT 1 FROM payment_attempts WHERE order_id=$1 AND provider_status='TRADE_FINISHED'",[cancellation.order_id])).rowCount) {
+        throw new AppError(422, 'TRADE_FINISHED', '渠道交易已结束，不能安排普通退款，请由商户核对处理路径。');
+      }
       const details = cancellationRuleDetails(cancellation.rule_preset, cancellation.amount_minor);
       if (
         cancellation.accepted_fee_minor !== details.feeMinor

@@ -96,6 +96,7 @@ export type PlanSnapshot = {
     id: string;
     type: 'purchase' | 'aftercare' | 'query';
     status: string;
+    itemIds: string[];
     orderIds: string[];
     expiresAt: string;
   }>;

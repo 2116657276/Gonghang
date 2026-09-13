@@ -125,7 +125,7 @@ export async function pausePurchases(client: PoolClient, user: AuthUser, planId:
   if (allItems.rows.every(item => paused.includes(item.id))) {
     await client.query("UPDATE authorizations SET status = 'paused', version = version + 1 WHERE plan_id = $1 AND type = 'purchase' AND status = 'active'", [plan.id]);
   }
-  const inFlight = await client.query<{ id: string }>("SELECT id FROM orders WHERE plan_id = $1 AND payment_status IN ('pending', 'unknown')", [plan.id]);
+  const inFlight = await client.query<{ id: string }>("SELECT id FROM orders WHERE plan_id = $1 AND plan_item_id = ANY($2::uuid[]) AND payment_status IN ('pending', 'unknown')", [plan.id, requested]);
   await appendEvent(client, plan.id, user.id, 'plan.paused', { itemIds: requested, reason: input.reason, inFlightOrderIds: inFlight.rows.map((order) => order.id) });
   return { planVersion: plan.version + 1, pausedItemIds: paused, inFlightOrderIds: inFlight.rows.map((order) => order.id) };
 }
@@ -161,10 +161,11 @@ export async function submitConfirmedChange(client: PoolClient, user: AuthUser, 
       continue;
     }
     if (item.intent === 'close' && item.orderId) {
-      const target = await client.query<{ environment: string; provider: string }>(
-        'SELECT environment, provider FROM orders WHERE id = $1 AND plan_id = $2 FOR UPDATE', [item.orderId, plan.id]);
+      const target = await client.query<{ environment: string; provider: string; payment_status: string }>(
+        'SELECT environment, provider, payment_status FROM orders WHERE id = $1 AND plan_id = $2 FOR UPDATE', [item.orderId, plan.id]);
       const targetOrder = target.rows[0];
       if (!targetOrder) notFound('未找到关单对象。');
+      if (targetOrder.payment_status !== 'pending') throw new AppError(409, 'CLOSE_REQUIRES_UNPAID_ORDER', '订单已不再明确待付，请查看最新事实；已付款须重新确认取消。');
       const isSandbox = targetOrder.environment === 'sandbox' && targetOrder.provider === 'alipay';
       if (isSandbox && !sandboxReadiness().ready) throw new AppError(422, 'EXTERNAL_CLOSE_NOT_READY', '沙箱关单配置尚未就绪。');
       if (!isSandbox && (targetOrder.environment !== 'simulation' || targetOrder.provider !== 'simulation')) {

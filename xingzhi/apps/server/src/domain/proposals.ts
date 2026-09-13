@@ -53,9 +53,9 @@ export async function createPurchaseProposal(client: PoolClient, user: AuthUser,
 export async function createChangeProposal(client: PoolClient, user: AuthUser, planId: string, rawInput: unknown) {
   const input = changeProposalInput.strict().parse(rawInput);
       const plan = await ownedPlan(client, planId, user, true);
-      const items = await client.query<PlanItemRow & { order_id: string | null; payment_status: string | null; amount_minor: number | null; rule_version: number | null; cancellation_rule: CancellationRule | null }>(`
+      const items = await client.query<PlanItemRow & { order_id: string | null; order_status: string | null; refunded_minor: number | null; payment_status: string | null; amount_minor: number | null; rule_version: number | null; cancellation_rule: CancellationRule | null }>(`
         SELECT plan_items.id, plan_items.plan_id, plan_items.catalog_item_id, plan_items.merchant_id, plan_items.name, plan_items.kind,
-          plan_items.price_minor, plan_items.status, plan_items.position, orders.id AS order_id, orders.payment_status, orders.amount_minor,
+          plan_items.price_minor, plan_items.status, plan_items.position, orders.id AS order_id, orders.status AS order_status, orders.refunded_minor, orders.payment_status, orders.amount_minor,
           catalog_items.rule_version, catalog_items.cancellation_rule
         FROM plan_items LEFT JOIN orders ON orders.plan_item_id = plan_items.id
         LEFT JOIN catalog_items ON catalog_items.id = plan_items.catalog_item_id
@@ -66,6 +66,9 @@ export async function createChangeProposal(client: PoolClient, user: AuthUser, p
         if (requested.intent === 'stop' && item.order_id) throw new AppError(422, 'STOP_REQUIRES_NO_ORDER', '已有订单的项目应选择关单或取消。');
         if (requested.intent === 'close' && item.payment_status !== 'pending') throw new AppError(422, 'CLOSE_REQUIRES_UNPAID_ORDER', '关单仅适用于明确待付款订单。');
         if (requested.intent === 'cancel' && item.payment_status !== 'paid') throw new AppError(422, 'CANCEL_REQUIRES_PAID_ORDER', '取消退款仅适用于已付款订单。');
+        if (requested.intent === 'cancel' && (Number(item.refunded_minor) > 0 || ['cancellation_processing', 'cancelled'].includes(item.order_status!))) {
+          throw new AppError(409, 'CANCELLATION_ALREADY_HANDLED', '订单已有取消处理或退款事实，请查看原取消申请和退款批次。');
+        }
         const details = requested.intent === 'cancel'
           ? cancellationRuleDetails(item.cancellation_rule!, Number(item.amount_minor))
           : { feeMinor: 0 };

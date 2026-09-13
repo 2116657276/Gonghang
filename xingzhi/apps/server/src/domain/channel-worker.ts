@@ -9,7 +9,7 @@ import type { ClaimedJob } from './worker-runtime.js';
 export const channelAdapter = { queryTrade: queryAlipayTrade, closeTrade: closeAlipayTrade, refund: refundAlipayTrade, queryRefund: queryAlipayRefund };
 type Context = {
   order_id: string; plan_id: string; merchant_id: string; amount_minor: number; refunded_minor: number;
-  payment_status: string; business_number: string; environment: string; provider: string;
+  payment_status: string; provider_status: string | null; business_number: string; environment: string; provider: string;
   cancellation_id: string | null; batch_id: string | null; refund_number: string | null; refund_amount: number | null;
   batch_status: string | null; accepted_refund_minor: number | null; cancellation_status: string | null;
   sent_at: Date | null; created_at: Date; attempt_count: number; purpose: string; authorization_id: string | null;
@@ -18,7 +18,7 @@ type Context = {
 async function lockContext(client: PoolClient, job: ClaimedJob) {
   await client.query('SELECT id FROM plans WHERE id=$1 FOR UPDATE', [job.plan_id]);
   const result = await client.query<Context>(`SELECT o.id AS order_id,o.plan_id,o.merchant_id,o.amount_minor,o.refunded_minor,
-    o.payment_status,p.business_number,o.environment,o.provider,c.id AS cancellation_id,b.id AS batch_id,
+    o.payment_status,p.provider_status,p.business_number,o.environment,o.provider,c.id AS cancellation_id,b.id AS batch_id,
     b.business_number AS refund_number,b.amount_minor AS refund_amount,b.status AS batch_status,
     c.accepted_refund_minor,c.status AS cancellation_status,op.sent_at,op.created_at,op.attempt_count,op.purpose,op.authorization_id
     FROM operations op
@@ -67,6 +67,9 @@ export async function processChannelJob(job: ClaimedJob, adapter = channelAdapte
     if(job.type==='sandbox_refund' && (!['approved','refund_processing'].includes(ctx.cancellation_status ?? '') || ctx.payment_status!=='paid')) {
       return {...ctx,blocked:true};
     }
+    if(job.type==='sandbox_refund' && !ctx.sent_at && ctx.provider_status==='TRADE_FINISHED') {
+      return {...ctx,blocked:true,blockedReason:'渠道交易已结束，不能继续普通退款；请由商户核对处理路径。'};
+    }
     if(job.type==='sandbox_refund' && !ctx.sent_at) {
       if(!ctx.refund_amount || ctx.refunded_minor+ctx.refund_amount>ctx.amount_minor) return {...ctx,blocked:true};
       await client.query("UPDATE refund_batches SET status='processing',updated_at=now() WHERE id=$1",[ctx.batch_id]);
@@ -77,7 +80,7 @@ export async function processChannelJob(job: ClaimedJob, adapter = channelAdapte
   if(!ctx)return false;
   let outcome:Outcome={state:'unknown',action:'waiting',evidence:{reason:'等待原业务编号核验'}};
   try {
-    if(ctx.blocked) outcome={state:'pending_review',action:'waiting',evidence:{reason:'当前授权、取消决定或金额条件不满足'}};
+    if(ctx.blocked) outcome={state:'pending_review',action:'waiting',evidence:{reason:'blockedReason' in ctx ? ctx.blockedReason : '当前授权、取消决定或金额条件不满足'}};
     else if(job.type==='sandbox_refund' || job.type==='sandbox_refund_recheck') {
       if(job.type==='sandbox_refund' && !ctx.sent_at) {
         const receipt=await adapter.refund(ctx.business_number,ctx.refund_number!,ctx.refund_amount!);
@@ -98,7 +101,7 @@ export async function processChannelJob(job: ClaimedJob, adapter = channelAdapte
         outcome={state:job.type==='sandbox_close'?'pending_review':'succeeded',action:'paid',evidence:{...receipt,source:'alipay_query',reason:'已确认付款，不能沿用未付关单授权退款'}};
       } else if(matched && receipt.tradeStatus==='TRADE_CLOSED' && ctx.payment_status!=='paid' && ctx.refunded_minor===0) {
         outcome={state:'succeeded',action:'closed',evidence:{...receipt,source:'alipay_query'}};
-      } else if(matched && receipt.tradeStatus==='WAIT_BUYER_PAY' && job.type==='sandbox_close' && ctx.attempt_count<=3) {
+      } else if(matched && receipt.tradeStatus==='WAIT_BUYER_PAY' && job.type==='sandbox_close' && !ctx.sent_at) {
         const closed=await adapter.closeTrade(ctx.business_number);
         outcome.evidence={...closed,source:'alipay_close',nextAction:'按原单查询关单结果'};
       }
@@ -156,6 +159,9 @@ export async function processChannelJob(job: ClaimedJob, adapter = channelAdapte
     await client.query(`UPDATE operations SET state=$2,result=$3,channel_evidence=$3,lease_until=NULL,
       next_run_at=now()+$4*interval '1 second',updated_at=now() WHERE id=$1`,[job.operation_id,outcome.state,{...outcome.evidence,observedAt:new Date().toISOString()},seconds]);
     await client.query("UPDATE jobs SET state=$2,lease_until=NULL,next_run_at=now()+$3*interval '1 second',updated_at=now() WHERE id=$1",[job.job_id,retry?'pending':'complete',seconds]);
+    if(outcome.action==='refunded' && outcome.state==='succeeded') {
+      await client.query("UPDATE manual_tasks SET state='resolved',resolved_at=now(),updated_at=now() WHERE refund_batch_id=$1 AND type='refund_recheck' AND state<>'resolved'",[current.batch_id]);
+    }
     if(outcome.state==='succeeded') await client.query("UPDATE manual_tasks SET state='resolved',resolved_at=now(),updated_at=now() WHERE operation_id=$1 AND state<>'resolved'",[job.operation_id]);
     await appendEvent(client,current.plan_id,null,`sandbox.${job.type}.${outcome.state}`,{operationId:job.operation_id,...outcome.evidence});
   });
