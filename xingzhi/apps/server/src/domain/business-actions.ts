@@ -49,9 +49,16 @@ export async function createConfirmedOrder(client: PoolClient, user: AuthUser, r
   if (!auth.scope.itemIds.includes(input.planItemId) || listPausedIds(plan.paused_item_ids).includes(input.planItemId)) {
     throw new AppError(422, 'PURCHASE_PAUSED', '该计划项当前暂停，需重新确认恢复范围。');
   }
-  const itemResult = await client.query<PlanItemRow & { simulation_mode: 'SUCCESS' | 'PENDING' | 'UNKNOWN'; current_price_minor:number; rule_version:number; active:boolean }>(`
+  const itemResult = await client.query<PlanItemRow & {
+    simulation_mode: 'SUCCESS' | 'PENDING' | 'UNKNOWN';
+    close_simulation_mode: 'SUCCESS' | 'PENDING' | 'UNKNOWN';
+    refund_simulation_mode: 'SUCCESS' | 'PENDING' | 'UNKNOWN';
+    current_price_minor:number; rule_version:number; active:boolean;
+  }>(`
     SELECT plan_items.id, plan_items.plan_id, plan_items.catalog_item_id, plan_items.merchant_id, plan_items.name, plan_items.kind,
-      plan_items.price_minor, plan_items.status, plan_items.position, catalog_items.simulation_mode, catalog_items.price_minor AS current_price_minor, catalog_items.rule_version, catalog_items.active
+      plan_items.price_minor, plan_items.status, plan_items.position, catalog_items.simulation_mode,
+      catalog_items.close_simulation_mode, catalog_items.refund_simulation_mode,
+      catalog_items.price_minor AS current_price_minor, catalog_items.rule_version, catalog_items.active
     FROM plan_items JOIN catalog_items ON catalog_items.id = plan_items.catalog_item_id WHERE plan_items.id = $1 FOR UPDATE`, [input.planItemId]);
   const item = itemResult.rows[0];
   if (!item || item.plan_id !== plan.id || item.kind === 'unbooked' || item.status === 'stopped') throw new AppError(422, 'ORDER_NOT_ALLOWED', '该计划项不能创建订单。');
@@ -69,9 +76,12 @@ export async function createConfirmedOrder(client: PoolClient, user: AuthUser, r
   const provider = environment === 'sandbox' ? 'alipay' : 'simulation';
   const businessNumber = environment === 'sandbox' ? `XZ_SBX_${orderId.replaceAll('-', '')}` : `SIM-PAY-${orderId.slice(0, 8)}`;
   await client.query(`INSERT INTO orders (id, plan_id, plan_item_id, owner_id, merchant_id, confirmation_id, purchase_authorization_id,
-    item_name, amount_minor, simulation_mode, environment, provider, reserved_minor) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$9)`,
+    item_name, amount_minor, simulation_mode, close_simulation_mode, refund_simulation_mode, environment, provider, reserved_minor)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$9)`,
     [orderId, plan.id, item.id, user.id, item.merchant_id, input.confirmationId, auth.id, item.name, item.price_minor,
-      environment === 'simulation' ? item.simulation_mode : 'UNKNOWN', environment, provider]);
+      environment === 'simulation' ? item.simulation_mode : 'UNKNOWN',
+      environment === 'simulation' ? item.close_simulation_mode : 'UNKNOWN',
+      environment === 'simulation' ? item.refund_simulation_mode : 'UNKNOWN', environment, provider]);
   await client.query('INSERT INTO payment_attempts (id, order_id, business_number, status, environment, provider) VALUES ($1,$2,$3,$4,$5,$6)',
     [randomUUID(), orderId, businessNumber, 'pending', environment, provider]);
   await client.query("UPDATE plan_items SET status = 'in_progress', price_minor=$2 WHERE id = $1", [item.id,item.price_minor]);

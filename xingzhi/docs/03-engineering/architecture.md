@@ -3,8 +3,8 @@
 | 字段 | 内容 |
 | --- | --- |
 | 文档编号 | XZ-ARCH |
-| 更新日期 | 2026-09-13 |
-| 状态 | 按用户要求暂停开发；API-24、交易工具、事件恢复、T10 复核、变更善后连续链、1.3／1.4 恢复准备及当前模型固定场景已有本地证据；官方渠道、前端重构与 S4／S5 仍未放行，详见[开发计划](development-plan.md)与[验证记录第十七至十九节](../04-quality/verification.md) |
+| 更新日期 | 2026-09-14 |
+| 状态 | 后端本轮实现与 55 项定向验收已通过，支付宝沙箱付款、原单退款查询和待付关单核心链已有记录；前端开发者可按契约接手，官方特殊场景、跨端完整验收与 S4／S5 仍未放行，详见[开发计划](development-plan.md)与[验证记录第十七至二十二节](../04-quality/verification.md) |
 
 ## 一、架构目标与选择
 
@@ -39,8 +39,8 @@ Pi 只管理单 Agent 模型与工具循环，不与 LangGraph 双重编排；�
 | 字段契约 | `packages/contracts/src/index.ts` | 复用输入校验和公开响应类型；不放 SQL、渠道 SDK、会话凭据或退款执行权限 |
 | 身份和接入 | `apps/server/src/auth`、`routes/api.ts` | 路由负责认证、参数解析与响应；将被 UI、Agent、worker 共同使用的业务动作逐项提取，保留既有 API |
 | 业务规则与事实 | `domain/access.ts`、`money.ts`、`plans.ts`、`aftercare.ts`；部分写入仍在路由 | 业务服务持有授权、金额、状态和事务；工具不得绕过服务直接操作表 |
-| 任务执行 | `domain/jobs.ts`、`domain/worker-runtime.ts`、`domain/channel-worker.ts`、`worker.ts` | 已分派模拟与沙箱渠道任务，统一租约、有限退避、原号查询和人工接管；官方交易证据仍待验收 |
-| 支付适配 | `payment/alipay-sandbox.ts`、`domain/channel-worker.ts`、`routes/api.ts` | 已支持交接、交易／退款查询、验签、未付关单和固定号退款；渠道观察与业务事实已在任务结果事务中归并，官方交易仍未联调 |
+| 任务执行 | `domain/jobs.ts`、`domain/worker-runtime.ts`、`domain/channel-worker.ts`、`worker.ts` | 已分派模拟与沙箱渠道任务，统一租约、有限退避、原号查询和人工接管；首批官方核心交易链已有证据，特殊场景仍待验收 |
+| 支付适配 | `payment/alipay-sandbox.ts`、`domain/channel-worker.ts`、`routes/api.ts` | 已支持交接、交易／退款查询、验签、未付关单和固定号退款；渠道观察与业务事实已在任务结果事务中归并，费用／分批退款、异步通知和外部中断仍待补证 |
 | 证据和存储 | `domain/events.ts`、`evidence.ts`、`db/migrations` | 事件与业务结果同事务；导出读取已确认事实，不新增交易判据 |
 | Agent 运行 | `routes/agent.ts`、`domain/agent-runtime.ts`、`agent-runs.ts`、`agent-tools.ts`、`business-reads.ts`、`proposals.ts`、`agent-proposals.ts`、`model-pricing.ts` | API-24、限流与超时、四个只读工具和两个方案工具已有历史验证；UI 与工具共用查询／方案服务，方案与 WAITING_USER 原子保存；真实模型方案联调及局部执行评测已有记录；交易执行工具、事件恢复、T10 复核和变更善后连续链已接入并作本地受控核对，完整官方链仍待验收 |
 
@@ -92,8 +92,8 @@ API-06R 的付款核验属于购买交易核验，消费者只能触发自己的
 
 本节只保留修正缘由和当前边界。开发前曾发现 API-12 可能误把沙箱订单送入模拟关单，业务结果与任务完成分属不同事务，API-06R／API-25 也缺少调用前合并和受控查单；这些问题已在本轮修正。
 
-当前实现将执行逻辑集中在 `domain/worker-runtime.ts` 与 `domain/channel-worker.ts`，HTTP 组装位于 `app.ts`；API-12、API-06R、API-25、渠道通知历史保护和领取版本检查属于此前定向核对范围。此前 31 项切片和后续 429 切片的 36 项自动检查均是历史证据；恢复开发后的交易工具、事件恢复、T10 复核、页面衔接和 DeepSeek V4.1 Flash 调用链以开发计划及验证记录第十七至十九节为准，真实官方交易、多场景模型稳定性和 S4／S5 放行仍未完成。
+当前实现将执行逻辑集中在 `domain/worker-runtime.ts` 与 `domain/channel-worker.ts`，HTTP 组装位于 `app.ts`；API-12、API-06R、API-25、渠道通知历史保护和领取版本检查属于此前定向核对范围。此前 31 项切片和 429 切片的 36 项自动检查均是历史证据；恢复开发后的交易工具、事件恢复、T10 复核、页面衔接、独立模拟结果和 DeepSeek V4.1 Flash 调用链以开发计划及验证记录第十七至二十二节为准。首批官方核心链已取得记录，但官方特殊场景、多场景模型稳定性、跨端验收和 S4／S5 放行仍未完成。
 
 ## 五、实现前仍需关闭的决定
 
-首发终端、认证方案、持久数据库、后台模式和本地运行默认值已统一，S1 对应的 pnpm 工作区、Vue／Fastify、PostgreSQL 和 worker 已在本机实现。Pi 与 DeepSeek 的公开版本、模型标识和费用／限流规则已核对；Pi 包已安装且本地无资金循环通过，真实只读／方案联调、当前模型固定执行评测、交易工具、事件恢复和恢复准备已有本地证据，但完整官方交易、多场景模型验收和综合验收仍待完成。沙箱条件及渠道参数在 S2 官方调用前核验。当前不创建云服务器或固定域名部署配置；公开部署条件另行确定，详见[评审议题](../00-governance/review-agenda.md)。详细运行设计见[运行文档](../04-quality/operations.md)。
+首发终端、认证方案、持久数据库、后台模式和本地运行默认值已统一，S1 对应的 pnpm 工作区、Vue／Fastify、PostgreSQL 和 worker 已在本机实现。Pi 与 DeepSeek 的公开版本、模型标识和费用／限流规则已核对；Pi 包已安装且本地无资金循环通过，真实只读／方案联调、当前模型固定执行评测、交易工具、事件恢复、恢复准备和首批官方核心交易已有本地证据。官方特殊场景、多场景模型验收、前端跨端联调和综合验收仍待完成。当前不创建云服务器或固定域名部署配置；公开部署条件另行确定，详见[评审议题](../00-governance/review-agenda.md)。详细运行设计见[运行文档](../04-quality/operations.md)。

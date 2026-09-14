@@ -32,7 +32,13 @@ after(async () => {
   await admin.end();
 });
 
-async function fixture(type: 'simulate_payment' | 'simulate_close' | 'simulate_refund_batch' = 'simulate_payment', environment = 'simulation') {
+type SimulationOutcome = 'SUCCESS' | 'PENDING' | 'UNKNOWN';
+
+async function fixture(
+  type: 'simulate_payment' | 'simulate_close' | 'simulate_refund_batch' = 'simulate_payment',
+  environment = 'simulation',
+  outcomes: { payment?: SimulationOutcome; close?: SimulationOutcome; refund?: SimulationOutcome } = {},
+) {
   const ids = { user: randomUUID(), merchant: randomUUID(), plan: randomUUID(), item: randomUUID(), proposal: randomUUID(), confirmation: randomUUID(), auth: randomUUID(), order: randomUUID(), cancellation: randomUUID(), batch: randomUUID() };
   const operation = await transaction(async client => {
     await client.query(`INSERT INTO users (id,email,display_name,role,password_hash) VALUES ($1,$2,'测试消费者','consumer','disabled'),($3,$4,'测试商户','merchant_admin','disabled')`, [ids.user, `${ids.user}@test.local`, ids.merchant, `${ids.merchant}@test.local`]);
@@ -41,8 +47,13 @@ async function fixture(type: 'simulate_payment' | 'simulate_close' | 'simulate_r
     await client.query("INSERT INTO proposals (id,plan_id,owner_id,type,status,plan_version,snapshot,expires_at) VALUES ($1,$2,$3,'purchase','confirmed',1,'{}',now()+interval '1 day')", [ids.proposal, ids.plan, ids.user]);
     await client.query("INSERT INTO confirmations (id,plan_id,owner_id,proposal_id,type,snapshot) VALUES ($1,$2,$3,$4,'purchase','{}')", [ids.confirmation, ids.plan, ids.user, ids.proposal]);
     await client.query("INSERT INTO authorizations (id,plan_id,owner_id,confirmation_id,type,scope,expires_at) VALUES ($1,$2,$3,$4,'purchase','{}',now()+interval '1 day')", [ids.auth, ids.plan, ids.user, ids.confirmation]);
-    await client.query(`INSERT INTO orders (id,plan_id,plan_item_id,owner_id,merchant_id,confirmation_id,purchase_authorization_id,item_name,amount_minor,environment,provider,payment_status,simulation_mode,reserved_minor)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,'测试订单',88000,$8,$9,$10,'SUCCESS',88000)`, [ids.order,ids.plan,ids.item,ids.user,ids.merchant,ids.confirmation,ids.auth,environment,environment === 'simulation' ? 'simulation' : 'alipay', type === 'simulate_refund_batch' ? 'paid' : 'pending']);
+    await client.query(`INSERT INTO orders (id,plan_id,plan_item_id,owner_id,merchant_id,confirmation_id,purchase_authorization_id,item_name,amount_minor,
+      environment,provider,payment_status,simulation_mode,close_simulation_mode,refund_simulation_mode,reserved_minor)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,'测试订单',88000,$8,$9,$10,$11,$12,$13,88000)`, [
+      ids.order,ids.plan,ids.item,ids.user,ids.merchant,ids.confirmation,ids.auth,environment,
+      environment === 'simulation' ? 'simulation' : 'alipay', type === 'simulate_refund_batch' ? 'paid' : 'pending',
+      outcomes.payment ?? 'SUCCESS', outcomes.close ?? 'SUCCESS', outcomes.refund ?? 'SUCCESS',
+    ]);
     await client.query("INSERT INTO payment_attempts (id,order_id,business_number,status,environment,provider) VALUES ($1,$2,$3,'pending',$4,$5)", [randomUUID(), ids.order, `TEST_${ids.order.replaceAll('-','')}`,environment,environment === 'simulation' ? 'simulation' : 'alipay']);
     if (type === 'simulate_refund_batch') {
       await client.query("INSERT INTO cancellation_requests (id,order_id,proposal_id,confirmation_id,accepted_fee_minor,accepted_refund_minor,status,rule_preset) VALUES ($1,$2,$3,$4,8000,80000,'approved','two_batches')", [ids.cancellation,ids.order,ids.proposal,ids.confirmation]);
@@ -124,6 +135,22 @@ test('两个执行者只领取一次；未知付款继续占用', async () => {
   assert.equal(jobs.length,1); await processClaimedJob(jobs[0]!);
   const order=(await pool.query('SELECT payment_status,reserved_minor FROM orders WHERE id=$1',[f.order])).rows[0];
   assert.equal(order.payment_status,'unknown'); assert.equal(order.reserved_minor,88000);
+});
+
+test('付款、关单与退款模拟结果互相独立', async () => {
+  const close = await fixture('simulate_close', 'simulation', { payment: 'SUCCESS', close: 'UNKNOWN' });
+  const closeJob = await claimNextJob(); assert.ok(closeJob);
+  await processClaimedJob(closeJob);
+  assert.equal((await pool.query('SELECT payment_status,reserved_minor FROM orders WHERE id=$1',[close.order])).rows[0].payment_status,'pending');
+  assert.equal((await pool.query('SELECT state FROM operations WHERE id=$1',[close.operation])).rows[0].state,'unknown');
+
+  const refund = await fixture('simulate_refund_batch', 'simulation', { payment: 'SUCCESS', refund: 'PENDING' });
+  const refundJob = await claimNextJob(); assert.ok(refundJob);
+  await processClaimedJob(refundJob);
+  assert.equal((await pool.query('SELECT refunded_minor FROM orders WHERE id=$1',[refund.order])).rows[0].refunded_minor,0);
+  assert.equal((await pool.query('SELECT state FROM operations WHERE id=$1',[refund.operation])).rows[0].state,'pending_review');
+  assert.equal((await pool.query('SELECT status FROM refund_batches WHERE id=$1',[refund.batch])).rows[0].status,'pending_review');
+  assert.equal((await pool.query('SELECT count(*)::int AS n FROM manual_tasks WHERE refund_batch_id=$1',[refund.batch])).rows[0].n,1);
 });
 
 const { processChannelJob } = await import('./channel-worker.js');

@@ -19,16 +19,22 @@ export type CatalogRow = {
   cancellation_fee_minor: number;
   cancellation_rule: CancellationRule;
   simulation_mode: 'SUCCESS' | 'PENDING' | 'UNKNOWN';
+  close_simulation_mode: 'SUCCESS' | 'PENDING' | 'UNKNOWN';
+  refund_simulation_mode: 'SUCCESS' | 'PENDING' | 'UNKNOWN';
 };
 
 export async function readCatalog() {
     const result = await query<CatalogRow>(`SELECT id, merchant_id, code, name, kind, description, price_minor, currency, rule_label,
-      rule_version, cancellation_fee_minor, cancellation_rule, simulation_mode FROM catalog_items WHERE active = true ORDER BY code`);
+      rule_version, cancellation_fee_minor, cancellation_rule, simulation_mode, close_simulation_mode, refund_simulation_mode
+      FROM catalog_items WHERE active = true ORDER BY code`);
     return { items: result.rows.map((item) => ({
       id: item.id, code: item.code, name: item.name, kind: item.kind, description: item.description,
       priceMinor: item.price_minor, currency: item.currency, ruleLabel: item.rule_label, ruleVersion: item.rule_version,
       cancellationFeeMinor: item.cancellation_fee_minor, cancellationRule: item.cancellation_rule,
-      simulationMode: item.simulation_mode, source: '本地模拟目录',
+      simulationMode: item.simulation_mode,
+      closeSimulationMode: item.close_simulation_mode,
+      refundSimulationMode: item.refund_simulation_mode,
+      source: '本地模拟目录',
     })) };
 }
 

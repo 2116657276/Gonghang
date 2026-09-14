@@ -43,6 +43,9 @@ const queryRenewalInput = z.object({
 const merchantRuleInput = z.object({
   expectedVersion: z.number().int().positive(),
   rule: z.enum(cancellationRules),
+  simulationMode: z.enum(['SUCCESS', 'PENDING', 'UNKNOWN']).optional(),
+  closeSimulationMode: z.enum(['SUCCESS', 'PENDING', 'UNKNOWN']).optional(),
+  refundSimulationMode: z.enum(['SUCCESS', 'PENDING', 'UNKNOWN']).optional(),
 });
 const merchantDecisionInput = z.object({
   decision: z.enum(['approve', 'reject', 'delay']),
@@ -257,13 +260,16 @@ export async function registerApi(app: FastifyInstance) {
     const user = requireRole(request, reply, 'merchant_admin');
     if (!user) return;
     const result = await query<CatalogRow & { active: boolean }>(`SELECT id, merchant_id, code, name, kind, description, price_minor, currency, rule_label,
-      rule_version, cancellation_fee_minor, cancellation_rule, simulation_mode, active
+      rule_version, cancellation_fee_minor, cancellation_rule, simulation_mode, close_simulation_mode, refund_simulation_mode, active
       FROM catalog_items WHERE merchant_id = $1 ORDER BY code`, [user.id]);
     return {
       items: result.rows.map((item) => ({
         id: item.id, code: item.code, name: item.name, priceMinor: item.price_minor,
         rule: item.cancellation_rule, ruleLabel: item.rule_label, ruleVersion: item.rule_version,
         cancellationFeeMinor: item.cancellation_fee_minor, active: item.active,
+        simulationMode: item.simulation_mode,
+        closeSimulationMode: item.close_simulation_mode,
+        refundSimulationMode: item.refund_simulation_mode,
       })),
     };
   });
@@ -276,18 +282,26 @@ export async function registerApi(app: FastifyInstance) {
     const input = parse(merchantRuleInput, request.body);
     const response = await transaction((client) => runIdempotent(client, context.user.id, `PUT /merchant/catalog/${id}/rule`, context.key, input, async () => {
       const result = await client.query<CatalogRow>(`SELECT id, merchant_id, code, name, kind, description, price_minor, currency, rule_label,
-        rule_version, cancellation_fee_minor, cancellation_rule, simulation_mode
+        rule_version, cancellation_fee_minor, cancellation_rule, simulation_mode, close_simulation_mode, refund_simulation_mode
         FROM catalog_items WHERE id = $1 FOR UPDATE`, [id]);
       const item = result.rows[0];
       if (!item || item.merchant_id !== context.user.id) notFound('未找到可管理的商品。');
       if (item.rule_version !== input.expectedVersion) throw new AppError(409, 'RULE_VERSION_CONFLICT', '测试规则已被更新，请刷新后再提交。');
       const details = cancellationRuleDetails(input.rule, item.price_minor);
       await client.query(`UPDATE catalog_items
-        SET cancellation_rule = $2, cancellation_fee_minor = $3, rule_label = $4, rule_version = rule_version + 1
-        WHERE id = $1`, [item.id, input.rule, details.feeMinor, details.label]);
+        SET cancellation_rule = $2, cancellation_fee_minor = $3, rule_label = $4,
+          simulation_mode = $5, close_simulation_mode = $6, refund_simulation_mode = $7,
+          rule_version = rule_version + 1
+        WHERE id = $1`, [item.id, input.rule, details.feeMinor, details.label,
+          input.simulationMode ?? item.simulation_mode,
+          input.closeSimulationMode ?? item.close_simulation_mode,
+          input.refundSimulationMode ?? item.refund_simulation_mode]);
       return {
         itemId: item.id, rule: input.rule, ruleLabel: details.label, cancellationFeeMinor: details.feeMinor,
         ruleVersion: item.rule_version + 1,
+        simulationMode: input.simulationMode ?? item.simulation_mode,
+        closeSimulationMode: input.closeSimulationMode ?? item.close_simulation_mode,
+        refundSimulationMode: input.refundSimulationMode ?? item.refund_simulation_mode,
       };
     }));
     return response;
@@ -306,7 +320,8 @@ export async function registerApi(app: FastifyInstance) {
     const input = parse(createPlanInput, request.body);
     const response = await transaction((client) => runIdempotent(client, context.user.id, 'POST /plans', context.key, input, async () => {
       const catalog = await client.query<CatalogRow>(`SELECT id, merchant_id, code, name, kind, description, price_minor, currency, rule_label,
-        rule_version, cancellation_fee_minor, cancellation_rule, simulation_mode FROM catalog_items WHERE active = true AND id = ANY($1::uuid[])`, [input.itemIds]);
+        rule_version, cancellation_fee_minor, cancellation_rule, simulation_mode, close_simulation_mode, refund_simulation_mode
+        FROM catalog_items WHERE active = true AND id = ANY($1::uuid[])`, [input.itemIds]);
       if (catalog.rowCount !== new Set(input.itemIds).size) throw new AppError(422, 'CATALOG_CHANGED', '部分商品已不可用，请重新选择。');
       const byId = new Map(catalog.rows.map((item) => [item.id, item]));
       const planId = randomUUID();

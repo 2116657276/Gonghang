@@ -89,6 +89,8 @@ export type PlanSnapshot = {
     status: string;
     paymentStatus: string;
     simulationMode: string;
+    closeSimulationMode: string;
+    refundSimulationMode: string;
     environment: 'simulation' | 'sandbox';
     provider: 'simulation' | 'alipay';
   }>;

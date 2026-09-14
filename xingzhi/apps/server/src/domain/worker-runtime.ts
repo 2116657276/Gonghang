@@ -104,18 +104,23 @@ async function processPayment(client: PoolClient, job: ClaimedJob) {
 
 async function processClose(client: PoolClient, job: ClaimedJob) {
   const outcome = await (async () => {
-    const result = await client.query<{ id: string; simulation_mode: 'SUCCESS' | 'PENDING' | 'UNKNOWN'; payment_status: string }>(
-      'SELECT id, simulation_mode, payment_status FROM orders WHERE id = $1 FOR UPDATE', [job.entity_id],
+    const result = await client.query<{ id: string; close_simulation_mode: 'SUCCESS' | 'PENDING' | 'UNKNOWN'; payment_status: string }>(
+      'SELECT id, close_simulation_mode, payment_status FROM orders WHERE id = $1 FOR UPDATE', [job.entity_id],
     );
     const order = result.rows[0];
     if (!order || order.payment_status !== 'pending') {
       return { state: 'failed' as const, result: { reason: '仅待付款订单可按此模拟关单。' }, eventType: 'simulation.close_skipped' };
     }
-    if (order.simulation_mode === 'UNKNOWN') {
+    if (order.close_simulation_mode !== 'SUCCESS') {
+      const pending = order.close_simulation_mode === 'PENDING';
       return {
-        state: 'unknown' as const,
-        result: { source: 'simulation', nextAction: '订单已进入未知状态，需要后续核对。' },
-        eventType: 'simulation.close_unknown',
+        state: pending ? 'pending_review' as const : 'unknown' as const,
+        result: {
+          source: 'simulation',
+          closeStatus: order.close_simulation_mode.toLowerCase(),
+          nextAction: pending ? '关单尚未完成，继续保留预算占用。' : '关单结果未知，需要后续核对。',
+        },
+        eventType: pending ? 'simulation.close_pending' : 'simulation.close_unknown',
       };
     }
     await client.query("UPDATE orders SET payment_status = 'closed', status = 'cancelled', reserved_minor = 0, updated_at = now() WHERE id = $1", [order.id]);
@@ -144,12 +149,12 @@ async function processRefundBatch(client: PoolClient, job: ClaimedJob) {
   const outcome = await (async () => {
     const result = await client.query<{
       id: string; cancellation_request_id: string; order_id: string; merchant_id: string; amount_minor: number; status: string;
-      environment: string; order_amount_minor: number; simulation_mode: 'SUCCESS' | 'PENDING' | 'UNKNOWN'; payment_status: string; refunded_minor: number;
+      environment: string; order_amount_minor: number; refund_simulation_mode: 'SUCCESS' | 'PENDING' | 'UNKNOWN'; payment_status: string; refunded_minor: number;
       cancellation_status: string; accepted_refund_minor: number;
     }>(`
       SELECT refund_batches.id, refund_batches.cancellation_request_id, refund_batches.order_id, refund_batches.merchant_id,
         refund_batches.amount_minor, refund_batches.status, refund_batches.environment,
-        orders.amount_minor AS order_amount_minor, orders.simulation_mode, orders.payment_status, orders.refunded_minor,
+        orders.amount_minor AS order_amount_minor, orders.refund_simulation_mode, orders.payment_status, orders.refunded_minor,
         cancellation_requests.status AS cancellation_status, cancellation_requests.accepted_refund_minor
       FROM refund_batches
       JOIN cancellation_requests ON cancellation_requests.id = refund_batches.cancellation_request_id
@@ -181,9 +186,9 @@ async function processRefundBatch(client: PoolClient, job: ClaimedJob) {
     }
 
     await client.query("UPDATE refund_batches SET status = 'processing', updated_at = now() WHERE id = $1", [batch.id]);
-    if (batch.simulation_mode !== 'SUCCESS') {
-      const state = batch.simulation_mode === 'PENDING' ? 'pending_review' as const : 'unknown' as const;
-      const batchState = batch.simulation_mode === 'PENDING' ? 'pending_review' : 'unknown';
+    if (batch.refund_simulation_mode !== 'SUCCESS') {
+      const state = batch.refund_simulation_mode === 'PENDING' ? 'pending_review' as const : 'unknown' as const;
+      const batchState = batch.refund_simulation_mode === 'PENDING' ? 'pending_review' : 'unknown';
       await client.query('UPDATE refund_batches SET status = $2, updated_at = now() WHERE id = $1', [batch.id, batchState]);
       await client.query("UPDATE cancellation_requests SET status = 'pending_review', updated_at = now() WHERE id = $1", [batch.cancellation_request_id]);
       const task = await ensureManualTask(client, {

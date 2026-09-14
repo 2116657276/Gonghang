@@ -21,6 +21,8 @@ type OrderRow = {
   status: string;
   payment_status: string;
   simulation_mode: string;
+  close_simulation_mode: string;
+  refund_simulation_mode: string;
   reserved_minor: number;
   refunded_minor: number;
   environment: 'simulation' | 'sandbox';
@@ -71,7 +73,8 @@ export async function planSnapshot(client: PoolClient, planId: string, user: Aut
   const plan = await readablePlan(client, planId, user);
   const [itemsResult, ordersResult, operationsResult, authorizationsResult, cancellationsResult, batchesResult, manualTasksResult] = await Promise.all([
     client.query<PlanItemRow>('SELECT id, catalog_item_id, name, kind, price_minor, status FROM plan_items WHERE plan_id = $1 ORDER BY position', [planId]),
-    client.query<OrderRow>(`SELECT id, plan_item_id, item_name, amount_minor, status, payment_status, simulation_mode, reserved_minor, refunded_minor,
+    client.query<OrderRow>(`SELECT id, plan_item_id, item_name, amount_minor, status, payment_status, simulation_mode,
+      close_simulation_mode, refund_simulation_mode, reserved_minor, refunded_minor,
       environment, provider
       FROM orders WHERE plan_id = $1 ORDER BY created_at`, [planId]),
     client.query<{ type: string }>(`SELECT type FROM operations WHERE plan_id = $1 AND state IN ('accepted', 'processing', 'unknown', 'pending_review') ORDER BY created_at`, [planId]),
@@ -117,6 +120,8 @@ export async function planSnapshot(client: PoolClient, planId: string, user: Aut
       status: order.status,
       paymentStatus: order.payment_status,
       simulationMode: order.simulation_mode,
+      closeSimulationMode: order.close_simulation_mode,
+      refundSimulationMode: order.refund_simulation_mode,
       environment: order.environment,
       provider: order.provider,
     })),
