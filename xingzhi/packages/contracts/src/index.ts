@@ -1,9 +1,10 @@
 import { z } from 'zod';
+export * from './consumer-backend.js';
 
 export const roles = ['consumer', 'merchant_admin', 'reviewer'] as const;
 export type Role = (typeof roles)[number];
 
-export const planItemKinds = ['transport', 'stay', 'activity', 'unbooked'] as const;
+export const planItemKinds = ['transport', 'stay', 'activity', 'unbooked', 'food'] as const;
 export type PlanItemKind = (typeof planItemKinds)[number];
 
 const uniqueUuidArray = (minimum = 0) => z.array(z.string().uuid()).min(minimum).refine(

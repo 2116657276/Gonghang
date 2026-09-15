@@ -1,14 +1,16 @@
 # 数据与事件设计：银行场景下的青年消费规划
 
+> 消费者新产品的实际数据库基线已追加迁移 016–022，月度预算、报价、购买意图与资金事件的字段和职责以项目根目录《行止_AB后端开发总方案_现状接口数据库任务.md》为准。本文件保留 013–015 的 30 天规划设计说明，不代表新月度流程已完成业务实现。
+
 | 字段 | 内容 |
 | --- | --- |
 | 文档编号 | XZ-DATA |
 | 更新日期 | 2026-09-15 |
-| 状态 | 新产品方向的数据设计；M1 迁移尚未实现，当前代码和本地数据库仍按迁移 001—012 运行 |
+| 状态 | M1 数据库结构已追加迁移 013—015；资金计算、接口、商品准入、共享类型和新 Demo 数据仍待实现 |
 | 适用范围 | 轻量记账、30 天资金规划、登记商品推荐、消费计划执行与变化后的调整 |
 | 实施顺序 | M1 后端迁移与接口 → M2 前端统一工作区 → M3 集中验收 |
 
-本文件替换原“出行计划与善后”数据文档，描述新方向的最小落地设计。它把已有的消费计划、授权、订单和支付事实作为交易底座，再增加账户、轻量流水、还款安排和近期规划。下文标为“现有”的内容来自当前代码树中的 001—012 迁移、种子和服务端查询；标为“拟新增”的表、字段、接口和命名只是 M1 设计，当前尚未实施；本轮临时实现已撤回，最终只保留文档。
+本文件替换原“出行计划与善后”数据文档，描述新方向的最小落地设计。它把已有的消费计划、授权、订单和支付事实作为交易底座，再增加账户、轻量流水、还款安排和近期规划。迁移 013—015 已在本地 `xingzhi_dev` 应用；下文资金计算、接口、Agent 和真实银行接入仍是开发设计，不得把建表表述为完整产品能力。
 
 ## 一、术语和事实边界
 
@@ -55,7 +57,7 @@
 
 ## 三、M1 最小迁移设计
 
-下列命名是设计名，建议从 013 起追加迁移，具体文件名和列名在实现前只做一次评审。历史迁移保持不动；新能力全部以新增表、少量目录字段和向后兼容的接口扩展完成。
+以下是迁移 013—015 的数据结构及后续服务规则。历史迁移保持不动；新能力通过新增表、少量目录字段和向后兼容的接口扩展完成。
 
 ### 3.1 `finance_accounts`：已授权账户目录
 
@@ -129,7 +131,7 @@
 | `label`、`period_label`、`sequence_no`、`sequence_total` | 展示账期或分期序号，可为空 |
 | `due_on`、`amount_due_minor`、`outstanding_minor` | 到期日、当期应还和仍未还金额，均为非负整数分 |
 | `status` | `upcoming`、`paid`、`overdue`、`unknown`、`cancelled` |
-| `settled_ledger_ref` | 关联已入账还款流水的内部引用，可为空 |
+| `settled_ledger_entry_id` | 关联已入账还款流水的内部引用，可为空 |
 | `included_in_obligation_id` | 可选地指向已包含本期金额的信用卡账单；被账单覆盖的分期子项只展示，不再单独扣除 |
 | `source`、`source_ref`、`created_at`、`updated_at` | 来源、去重和时间 |
 
@@ -154,30 +156,32 @@ M1 对同一用户选定的主账户只允许一份 `active` 规划；重新读�
 
 ### 3.6 `cashflow_plan_items`：用户补充的规划行
 
-规划行是预测或解释输入，不是资金占用账本。它只保存用户手动补充的预计收入和必要支出，不复制流水、还款安排、订单或退款批次，也不新建独立目标系统。生活目标直接由现有 `plans`／`plan_items` 表达。
+规划行是预测或解释输入，不是资金占用账本。它保存用户手动补充的预计收入、必要支出和自定义每日消费项目，不复制流水、还款安排、订单或退款批次，也不新建独立目标系统。生活目标仍由现有 `plans`／`plan_items` 表达。
 
 | 字段 | 约束与用途 |
 | --- | --- |
-| `id`、`cashflow_plan_id` | 规划归属 |
-| `line_type` | `income` 或 `essential_expense`；保留金额只来自 `cashflow_plans.reserve_target_minor`，生活目标由现有 `plans`／`plan_items` 表达 |
-| `label`、`amount_minor`、`due_on` | 展示名称、正整数分和发生／预计日期 |
+| `id`、`owner_id`、`cashflow_plan_id` | 规划归属；资金规划与行属于同一消费者 |
+| `line_type` | `income`、`essential_expense` 或 `planned_spend`；后者表示用户自定义的每日消费 |
+| `label`、`category_code`、`amount_minor`、`due_on` | 名称、类别、用户预计金额（正整数分）和预计日期；不是商户成交价 |
 | `source` | 首版为 `user_input`；禁止客户端提交外部订单、流水或还款标识 |
 | `fact_status` | `estimated`、`confirmed` 或 `cancelled`；流水和渠道事实不写入此表 |
+| `related_plan_id`、`selected_plan_item_id` | 可选关联消费目标及用户后来选中的登记商品快照；未选商家时可保持为空 |
+| `settled_ledger_entry_id` | 可选关联已兑现的账户流水，由受控服务核对归属后写入 |
 | `created_at`、`updated_at` | 时间 |
 
-同一用户输入在同一规划中只能有一条有效规划行；增加可空 `settled_ledger_entry_id` 关联已兑现流水，由受控服务设置并核对账户归属。形成关联后该安排不再扣除，原行及金额仍保留；更新规划使用版本检查，旧行保留历史但不再计算。刷新规划不会生成流水副本，订单、还款安排和退款批次在读取时按关联动态派生，不另存一份金额。
+同一用户输入在同一规划中只能有一条有效规划行，后续写接口须复用幂等和版本检查。自定义项目未匹配商家时按用户估价参加规划，但不能建单；关联 `selected_plan_item_id` 后改按 `plan_items.price_minor` 的真实商品快照计算，不能将估价和报价相加。形成已兑现流水关联后，原安排不再重复扣除，原行及估价仍保留供复盘；刷新规划不会生成流水副本。
 
-现有 `plans` 表拟新增一个可空的 `cashflow_plan_id` 外键和 `cashflow_state`。旧计划回填为 `legacy` 并保持 `cashflow_plan_id = NULL`；新用户从空状态创建的目标草稿为 `draft`，也可以暂时为 NULL，但只能编辑目标和输入，不能确认购买或建单；完成账户选择后由服务端把该草稿关联到 active `cashflow_plan` 并改为 `active`。一个资金规划可以被同一主账户下的多个消费计划共享，一个消费计划在同一时点只属于一个 active 规划。`plans.purpose` 继续作为生活目标标题，`plans.target_budget_minor` 作为可空的用户目标预算；`purchase_limit_minor` 仅作购买授权上限，不能用其历史默认值填补未知预算，另增加 `target_date`；计划项必要性和可调整性拟通过 `plan_items.required`、`plan_items.adjustable` 表达。上述字段不复制订单金额，也不形成第二个支付授权。
+现有 `plans` 表已增加可空的 `cashflow_plan_id` 外键和 `cashflow_state`。旧计划标记为 `legacy` 并保持 `cashflow_plan_id = NULL`；新用户从空状态创建的目标草稿须显式写 `draft`，暂时没有资金规划时只能编辑目标和输入，后续服务必须阻止确认购买或建单。完成账户选择后由服务端把该草稿关联到 active `cashflow_plan` 并改为 `active`。一个资金规划可以被同一主账户下的多个消费计划共享。`plans.target_budget_minor` 是可空的用户目标预算，`purchase_limit_minor` 仍为购买授权上限；`plan_items.required`、`adjustable` 和 `planned_on` 分别记录必要性、可调整性和项目日期。上述字段不复制订单金额，也不形成第二个支付授权。
 
 ### 3.7 目标预算与草稿准入
 
-新产品不再另建 goal、目标或长期资金池表。现有 `plans` 继续表达一项生活目标：`purpose` 作为标题，`target_budget_minor` 作为可空的目标预算，`purchase_limit_minor` 保留为购买授权上限，另增加可选的 `target_date`；`version` 继续作为并发确认版本。现有 `plan_items` 继续表达候选或已选消费，M1 只增加可选的 `required`（必须保留）和 `adjustable`（允许在变化时调整），默认分别为 `false` 和 `true` 以兼容历史计划。
+新产品不再另建 goal、目标或长期资金池表。现有 `plans` 继续表达一项生活目标：`purpose` 作为标题，`target_budget_minor` 作为可空的目标预算，`purchase_limit_minor` 保留为购买授权上限，另增加可选的 `target_date`；`version` 继续作为并发确认版本。现有 `plan_items` 继续表达已选消费，新增 `required`（必须保留）、`adjustable`（允许调整）和 `planned_on`（项目日期）；前两项分别默认 `false` 和 `true`，兼容历史计划。
 
 空状态自然语言入口可以先创建 `cashflow_state = 'draft'`、`cashflow_plan_id = NULL` 的目标草稿。Agent 只能保存用户当前消息中明确表达的目标名称、日期、初始目标预算和需求条件，不能推断缺失金额或改变保留目标；这种非执行草稿不需要逐字段二次确认。没有账户规划时不能生成购买授权、建单或付款交接。选择主账户后，服务端在版本检查下关联 active `cashflow_plan`；计划进入 active 后，目标预算、必须项、可调整项和商品集合的变化均由用户通过结构化界面确认，Agent 只能提出建议。历史 `cashflow_state = 'legacy'` 的 NULL 计划不可改绑新规划，原已受理订单和善后仍按原授权完成。
 
 ### 3.8 `catalog_items` 的最小扩展
 
-现有 `catalog_items` 已有商品、商户、价格、取消规则和三项模拟结果，继续作为登记目录。为支持同类候选和银行平台边界，M1 只拟增加：
+现有 `catalog_items` 已有商品、商户、价格、取消规则和三项模拟结果，继续作为登记目录。迁移 015 增加：
 
 | 字段 | 用途 |
 | --- | --- |
@@ -190,7 +194,7 @@ M1 对同一用户选定的主账户只允许一份 `active` 规划；重新读�
 
 价格、规则版本和取消费用继续使用现有列；计划项和订单继续保存快照。M1 不新增向量库、推荐结果表、库存系统或复杂报价服务。候选排序由服务端按价格适配、筛选条件、可执行性和取消条件做确定性排序，AI 只解释返回数据。
 
-现有数据库和共享类型中的 `kind` 当前只有 `transport`、`stay`、`activity`、`unbooked`。`unbooked` 仍表示只能留在计划中的未下单项。新餐饮候选不能把 `activity` 当作食物，也不能只增加 `category_code = food` 却让执行层误判；M1 应在新增迁移中把 `food` 加入 `catalog_items` 和 `plan_items` 的允许值，并同步更新 `packages/contracts` 的 `PlanItemKind`、Agent 工具 schema 和前端共享类型。`category_code` 仍用于更细筛选，例如 `hotpot`、`indoor_activity`；`kind` 决定计划项的执行分类。旧四类数据不改变，未完成类型同步前新餐饮项不得进入可执行确认。
+数据库 `kind` 约束已允许 `food`；共享类型、Agent 工具 schema、前端类型及服务端交易准入尚未同步。`unbooked` 仍只能留在计划中；`category_code` 用于更细筛选，例如 `hotpot`。在类型和执行检查完成前，新餐饮项不得进入可执行确认，也不能仅凭数据库的 `purchase_mode` 字段声称旧接口已经禁止 listing 下单。
 
 ### 3.9 增量迁移顺序与失败处理
 
@@ -199,9 +203,9 @@ M1 对同一用户选定的主账户只允许一份 `active` 规划；重新读�
 | 顺序 | 迁移内容 | 兼容和回退要求 |
 | --- | --- | --- |
 | 013 | 创建 `finance_accounts`、`finance_account_snapshots`、`finance_ledger_entries`、`finance_obligations`、`cashflow_plans` 和 `cashflow_plan_items` | 全部为新增表；创建失败回滚本文件，不影响 001—012 |
-| 014 | 给 `plans` 增加可空 `cashflow_plan_id`、`cashflow_state`、`target_date`、`target_budget_minor`；给 `plan_items` 增加 `required`、`adjustable`；建立归属和查询索引 | 旧 `plans` 回填 `cashflow_state = 'legacy'`，`cashflow_plan_id` 保持 NULL；不把旧订单挪入新规划 |
-| 015 | 给 `catalog_items` 增加类别、位置、标签、可执行方式、服务时间和更新时间；扩展 `kind` 允许值并同步共享类型 | 旧商品新字段按现有类型回填：transport／stay／activity 为 orderable，unbooked 为 listing；新登记项必须显式选择可执行方式；A/B/C/D 不由新 seed 重新覆盖或激活 |
-| seed（不作为结构迁移） | 写入 `M1-*` Demo 账户、快照、流水、还款、规划和目录夹具 | 按 `M1-*` 稳定标识只补齐缺失样本；重复执行不覆盖用户后续修改；不删除历史沙箱事实、不清空旧数据、不对 A/B/C/D 使用会覆盖价格规则的通用 upsert |
+| 014 | 给 `plans` 增加资金关联、状态、目标日期及预算；给 `plan_items` 增加 `required`、`adjustable`、`planned_on`；给 `proposals` 增加资金版本与快照依据，并建立归属约束 | 旧 `plans` 回填 `legacy`，资金关联保持 NULL；不把旧订单挪入新规划 |
+| 015 | 给 `catalog_items` 增加类别、位置、标签、可执行方式、服务时间和更新时间；数据库 `kind` 约束允许 `food` | 旧商品回填：transport／stay／activity 为 orderable，unbooked 为 listing；共享类型和服务端执行检查仍待同步，新目录项默认 listing，以免漏填时被误视为可下单 |
+| seed（尚未实施，不作为结构迁移） | 未来写入 `M1-*` Demo 账户、快照、流水、还款、规划和目录夹具 | 按稳定标识只补齐缺失样本；重复执行不覆盖用户后续修改；不删除历史沙箱事实、不清空旧数据 |
 
 每个文件失败时回滚该文件并保留前序已提交迁移，修复后按文件名重跑；不使用清库或手工删除 `schema_migrations` 的方式恢复。回填只标识旧记录，不改变旧计划的订单、支付、退款或授权；新建的 NULL 草稿必须显式写 `cashflow_state = 'draft'`，因此能与旧 NULL 历史区分。迁移完成后，若服务端发现财务表、计划关联或目录类型不同步，应停止新交易写入并继续允许既有受理操作完成，修复迁移后再开放。
 
