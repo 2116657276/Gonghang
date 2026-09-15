@@ -2,6 +2,10 @@ import Fastify from 'fastify';
 import { registerBudgetItemApi } from './routes/budget-items.js';
 import { registerOfferApi } from './routes/offers.js';
 import { registerPlanningDraftApi } from './routes/planning-drafts.js';
+import { registerFinanceAccountApi } from './routes/finance-accounts.js';
+import { registerFinanceAssessmentApi } from './routes/finance-assessments.js';
+import { registerBudgetPeriodReviewApi } from './routes/budget-period-review.js';
+import { registerBudgetPeriodApi } from './routes/budget-periods.js';
 import cookie from '@fastify/cookie';
 import cors from '@fastify/cors';
 import { ZodError } from 'zod';
@@ -13,6 +17,8 @@ import { registerAgentApi } from './routes/agent.js';
 import type { StreamFn } from '@earendil-works/pi-agent-core';
 import type { BudgetItemPort } from './domain/budget-port.js';
 import type { PlanningDraftPort } from './domain/planning-draft-port.js';
+import { budgetPlanningDraftPort } from './domain/budget-planning-draft-port.js';
+import { applyBudgetItemChange, cancelBudgetItem } from './domain/budget-periods.js';
 
 export async function buildApp(options: {
   agentStream?: StreamFn;
@@ -52,8 +58,16 @@ app.setErrorHandler((error, _request, reply) => {
 });
 await registerApi(app);
 await app.register(registerOfferApi);
-await app.register(registerBudgetItemApi, { budgetItemPort: options.budgetItemPort });
-await app.register(registerPlanningDraftApi, { planningDraftPort: options.planningDraftPort });
+await app.register(registerFinanceAccountApi);
+await app.register(registerFinanceAssessmentApi);
+await app.register(registerBudgetPeriodReviewApi);
+await app.register(registerBudgetPeriodApi);
+await app.register(registerBudgetItemApi, {
+  budgetItemPort: options.budgetItemPort ?? { applyBudgetItemChange, cancelBudgetItem },
+});
+await app.register(registerPlanningDraftApi, {
+  planningDraftPort: options.planningDraftPort ?? budgetPlanningDraftPort,
+});
 registerAgentApi(app,options.agentStream);
 
 return app;

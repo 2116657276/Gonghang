@@ -1,16 +1,16 @@
 # 行止本地运行说明
 
-更新日期：2026-09-15。本文描述当前代码和本地运行边界，不表示新资金规划功能已经完整实现。新产品文档见[文档中心](docs/README.md)，SQL 与种子改造见[开发计划](docs/03-engineering/development-plan.md)；现有程序与新方向的总体进度以文档中心和验证策略为准。001—023、B00 目录报价、B01 消费者项目接口及 B02 规划草稿接口已经进入当前代码基线，B02 的无账户需求草稿可以保存；A 侧账户事实、真实预算写入／逐日评估、消费者 Agent 运行接入及主演示资金数据仍待接入。现有通用 seed 仍是旧 A/B/C/D 数据，不能用来加载新场景。
+更新日期：2026-09-15。本文描述当前代码和本地运行边界，不表示新资金规划功能已经完整实现。新产品文档见[文档中心](docs/README.md)，SQL 与种子改造见[开发计划](docs/03-engineering/development-plan.md)；现有程序与新方向的总体进度以文档中心和验证策略为准。001—026、B00—B02、A00—A06 的后端代码已进入代码基线；B03/B04 本人确认与新建单接线、B05/B06 结果适配、消费者 Agent 运行接入及完整主演示仍待完成。现有通用 seed 仍是旧 A/B/C/D 数据，新资金样例需使用独立初始化入口。
 
 | 项目 | 当前事实 |
 | --- | --- |
 | 运行组成 | Vue／Vite、Fastify API、worker、PostgreSQL |
 | 本地地址 | 网页 `http://localhost:5173`，API `http://127.0.0.1:8787` |
 | 支付 | 当前日常 simulation，历史沙箱订单保留原环境；正式演示才按授权使用 sandbox |
-| 数据 | 当前 `xingzhi_dev` 保留原交易资料并已应用 001—023；B00 有 2 条 Demo 报价，账户、预算周期和规划草稿样本仍未写入；现有通用种子仍为 A/B/C/D |
+| 数据 | 本机 `xingzhi_dev` 保留原交易资料并已应用 001—026；已独立初始化 A00 的 Demo 借记账户、¥2,000 快照及本月 ¥500／¥900／¥400 样例，尚无真实银行事实或新消费者完整业务流程 |
 | 凭据 | 仅本机被 Git 忽略的环境与秘密文件，不复制到文档或模型 |
 
-以下命令是已有程序的操作说明，不是要求立即执行。空库执行 `pnpm db:migrate` 会按顺序应用 001—023；当前 `xingzhi_dev` 已完成这些迁移。运行通用 `pnpm db:seed` 仍只会得到旧 A/B/C/D 目录和测试账号，不会得到新方案的账户、预算或还款样本。
+以下命令是已有程序的操作说明，不是要求立即执行。空库执行 `pnpm db:migrate` 会按顺序应用 001—026；本机 `xingzhi_dev` 已完成这些迁移。运行通用 `pnpm db:seed` 仍只会得到旧 A/B/C/D 目录和测试账号；A00 资金样例须单独初始化，不含真实流水或还款样本。
 
 ## 首次运行
 
@@ -28,19 +28,47 @@ pnpm dev
 
 历史真实模型只读烟测和 T04／T08 方案联调已通过，API-24 提供查询与方案助手入口；Pi 依赖已安装。服务端只从本机 `.env` 读取 `DEEPSEEK_API_KEY`，固定 `DEEPSEEK_BASE_URL=https://api.deepseek.com`，当前配置为 `DEEPSEEK_MODEL=deepseek-flash`（DeepSeek V4.1 Flash，用户简称“ds4.1flash”）；累计模型费用上限为人民币 100 元，采用每分钟 10 次、突发 2、同计划并发 1 的常规服务端限流。[历史验收归档](docs/archive/transaction-verification.md)第十八至二十二节记录原模型、进程恢复、授权连续性及交易核验；现行[新版验证策略](docs/04-quality/verification.md)不沿用这些章节编号。未配置密钥或人民币预算账本时不会发起外部模型调用。
 
-本阶段还提供 `pnpm typecheck` 和 `pnpm test:targeted`。当前 B00—B02 已有独立定向测试；这些测试只证明接口边界和桩交接，不证明真实资金服务、模型调用或完整 N 案例。`pnpm build` 留给首次交付构建或构建路径变更时执行，不作为日常文档／业务检查。
+本阶段还提供 `pnpm typecheck` 和 `pnpm test:targeted`。当前 A00—A01、A03—A06、B00—B02 已有独立定向测试；B01 的资金写入仍使用固定 A 桩，B02 的实际逐日评估已接入日常服务，A05 用测试回调模拟 B 的同事务确认/建单，A06 用回滚事务模拟渠道与账户流水，但均不证明 B03—B06 实际接线、真实渠道结果、模型调用或完整 N 案例。`pnpm build` 留给首次交付构建或构建路径变更时执行，不作为日常文档／业务检查。
 
 ## 测试账号
 
 种子数据使用两个消费者、一个测试商户管理员和一个只读审核者。邮箱分别是 `consumer-a@xingzhi.local`、`consumer-b@xingzhi.local`、`merchant@xingzhi.local`、`reviewer@xingzhi.local`；密码只取自本机 `.env` 的 `SEED_DEMO_PASSWORD`，不写入 Git。
 
-消费者工作台可建立 A/B/C/D 计划，生成和确认购买预览、建单、观察模拟结果、暂停购买、生成变更预览、提交模拟善后，并查看授权、退款批次和当前人工责任。商户工作台可管理命名规则预设、查看取消队列、处理延迟申请、安排固定退款批次及记录人工复核；审核者只显示服务端分配的计划范围。所有写操作由服务端会话、请求来源、幂等键和计划版本共同约束。
+旧消费者工作台仍保留 A/B/C/D 计划、订单读取及善后等功能；已建立 active 新资金规划周期的消费者不再能走旧计划预算的新建单入口，以免绕过 A05 的账户级准入。尚未接入 B03/B04 前，新消费者只可预览，不可据此付款。商户工作台可管理命名规则预设、查看取消队列、处理延迟申请、安排固定退款批次及记录人工复核；审核者只显示服务端分配的计划范围。
 
 ## 现有证据与新缺口
 
-原交易基础的 55 项检查及首批沙箱核心链见[历史验收](docs/archive/transaction-verification.md)。B00 已提供登记目录和报价读取，B02 已提供需求／预算草稿 API 及独立工具白名单；新账户、轻量账目、日期规划、真实逐日评估、消费者 Agent 运行接入和统一页面仍待开发。历史类型或行为通过不能覆盖新增实现。
+原交易基础的 55 项检查及首批沙箱核心链见[历史验收](docs/archive/transaction-verification.md)。A00 已提供独立 Demo 资金样例，A01 已提供本人账户事实读取、保守执行基准与撤回，A02 已提供自然月预算/项目写入、激活和目标审计，A03 已提供内部逐日现金流与预算草稿只读评估；A04 已提供实际报价预览及不可改写的短时资金证据，A05 已提供供 B 在同一事务中调用的最终资金准入，A06 已提供内部核验/去重与本人复盘读取；B00 已提供登记目录和报价读取，B02 已提供需求／预算草稿 API 及独立工具白名单。真实银行账户接入、B03/B04 新购买确认与建单、B05/B06 受信结果适配、消费者 Agent 运行接入和统一页面仍待开发。历史类型或行为通过不能覆盖新增实现。
 
 本地运行约束、环境切换及数据清理见[运行边界](docs/04-quality/operations.md)。不得用清库或重写已应用迁移代替新 SQL 迁移，也不得为了新样本删除沙箱交易和模型费用。
+
+### A00 Demo 资金事实与 A01 账户读取
+
+先准备本地测试账号并完成数据库迁移，再从仓库根目录执行 `pnpm --filter @xingzhi/server db:seed:consumer-finance`。入口只给 `consumer-a@xingzhi.local` 初始化稳定的 Demo 借记账户、完整 observed ¥2,000 快照、本月 ¥500 储蓄目标、¥900 必要项目和 ¥400 可调项目；¥80 晚餐包含在 ¥400 内。脚本输出不含密码的固定 UUID/JSON 样例，重复运行不覆盖旧目录、订单或已存在的资金事实；账户被撤回或样例金额被用户改动时会拒绝重置。初始化不会产生真实银行流水、信用负债或可下单授权。
+
+消费者会话可调用 `GET /api/finance/accounts` 读取本人脱敏账户、最后快照、流水状态、还款与展示用预计收入/待核退款/信用信息。执行用现金仅来自本人未撤回借记账户的最新完整 observed 快照，以及快照覆盖截止后已 posted 的同来源流水；晚到旧快照、pending、信用额度、预计收入与待核退款不增加执行现金。当前执行基准要求快照不超过 24 小时；缺失、无覆盖截止或过期时返回 unknown，不把未知填 0。
+
+本人撤回授权调用 `POST /api/finance/accounts/:id/revocations`，正文固定 `{ "expectedStatus": "linked" }`，并携带同源请求与 `Idempotency-Key`。首次撤回在一个事务中使账户资金版本和关联周期版本各推进一次；再次撤回不加版本。已撤回账户仍能看本地历史摘要；A02 新预算写入与 A03 新评估返回 `FINANCE_SCOPE_REVOKED`。B 的新交易入口尚未接入，不能因本接口存在就声称所有新交易链路已完成撤回门禁。
+
+### A03 只读逐日现金流
+
+服务端内部 `forecastBudgetCashflow` 从 A01 的本人借记现金基准出发，按天合并同账户的未兑现必要/自定义支出、还款及新订单承诺；订单已经由已核验账户流水扣款时不再扣第二次，未到账退款、预计收入与信用额度只列作说明。每日给出现金、储蓄保留线、缺口和受影响日期；同账户多个目标共用同一余额。月底够钱但月中曾透支，仍是 `blocked`。滚动 30 日读相邻月份，缺周期或事实时给 `unknown`，不把空记录视为零开支。当前周期既没有必要／required 项目又没有用户明确确认“必要支出为零”时给 `unknown`；026 增加确认时间字段，A02 激活入口要求本人确认。
+
+B02 关联预算周期的结构化草稿现在由 A03 只读评估端口计算摘要；草稿缺日期、金额或优先级时返回 `unknown`，不拿模型建议补用户输入。评估不写 `budget_items`、`funding_assessments` 或订单；固定样例已验算 ¥200 → ¥181 → ¥219 储蓄缺口。A03 的 `allowed` 不能用于直接下单。
+
+### A04 购买预览与 A05 内部最终准入
+
+消费者会话调用 `POST /api/finance/assessments`，正文固定 `{ periodId, budgetItemId, quoteId, expectedFinancialVersion, expectedPeriodVersion, expectedQuoteVersion, mode: "preview" }`，请求需同源并带 `Idempotency-Key`。服务端重读本人项目和有效、可下单的报价，以真实报价替换用户估价，按购买当日预留全价而非只在未来计划日期扣差额；返回 `FundingAssessment` 并保存不可改写、最长五分钟的证据。¥80 估价／¥99 报价返回估价 8000 分、报价 9900 分、增量 1900 分。`unknown` 的现行共享结构将 `shortfallMinor` 固定为 0，仅表示“缺口不可量化”，**不表示资金足够**；必须结合 `status`/`reasonCodes` 判断。
+
+内部 `assessUnexpectedSpend` 与 `assessAdjustmentOption` 也复用逐日引擎，可在内存中比较意外支出与“取消／改期／调低尚未承诺的可调项目”选项，不改数据库；已承诺订单、必要支出和有开放购买意图的项目不能借预览释放资金。
+
+`commitPurchaseAssessment(client, input, confirmAndCreateOrder)` 是 A05 给 B04 的内部同事务函数，不是 HTTP 付款入口。B04 必须把本人会话、明确确认金额与版本绑定到请求，并在同一 `PoolClient` 上由回调完成 `proposed → confirmed`、插入一笔 `pending` 订单、再把意图置为 `ordered`；A05 在账户优先锁下重读本人授权、所有同账户预算承诺、报价、意图和最新逐日结果，验证 B 只写出一笔范围正确的订单后才把预算项目置为 `committed`。B 的外部支付交接必须等数据库事务提交成功后发起，任何错误必须回滚整笔事务。旧计划新建单对 active 新资金规划用户返回 `LEGACY_PURCHASE_DISABLED`，旧订单读取及善后不受此门禁影响。B03/B04 尚未提供生产入口，所以目前不能把 A04 `allowed` 或 A05 定向测试说成消费者已能下单付款。
+
+### A06 受控到账事件与月度复盘
+
+`applyVerifiedMoneyEvent(client, ownerId, event, { appliedLedgerEntryId })` 仅供 B 的受信渠道/Worker 适配器在数据库事务中调用，不开放消费者写路由。B 先核验原始渠道来源和提供方稳定事件编号；A 再重读本人新订单、支付环境、借记账户来源与金额。`payment_pending`、`result_unknown`、`refund_requested`、`refund_verified` 只留证据，不增加确认现金；`payment_posted`/`refund_posted` 必须关联同订单、同金额、同来源和正确方向的 posted 账户流水。模拟订单只能写 Demo 来源；沙盒收银台回执不能直接写 Demo 或 `bank_api` 到账，沙盒真正到账须另有工行来源账户流水。重复事件返回原事件，改参重用事件编号或重复引用同一到账流水会拒绝。024 锁定已引用流水和新订单成交价；随后追加的 025 让直接写资金事件表也必须通过订单与账户范围校验，不改写已应用的 024。
+
+消费者 `GET /api/budget-periods/:id/review` 返回本人原/当前储蓄目标、已确认周期收支、订单付款、退款申请/渠道确认/实际到账、尚未到账差额和未知事项。目标变更记录与当前目标若不连贯，显示 `TARGET_AUDIT_MISMATCH`/unknown。关闭周期后晚到的账户退款仍归回原订单；只有精确覆盖上海时区月末的 observed 账户快照，才给出“月末剩余现金”和目标缺口，否则保持 null/unknown，不把当前余额或 AI 建议节省额冒充历史实际储蓄。B05/B06 尚未接入受信事件端口，现阶段只证明 A06 规则与 Demo 回滚联调，不代表真实银行或沙盒资金已经同步。
 
 ### B00 消费者目录与报价
 
@@ -52,12 +80,16 @@ pnpm dev
 
 新增项目使用 `POST /api/budget-periods/:id/items`，编辑使用 `PATCH /api/budget-periods/:id/items/:itemId`，取消尚未执行项目使用 `POST /api/budget-periods/:id/items/:itemId/cancellations`。三者均要求消费者会话、同源请求、`Idempotency-Key`，并校验路径中的周期／项目与正文一致。成功响应包含 A 返回的项目、月度资金依据及当日同分类有效候选报价；候选只供后续选择，不自动关联项目或取得购买资格。
 
-B01 的 HTTP、事务、幂等和响应组装已经完成，但 A02 的真实项目写函数尚未接入。当前日常服务调用这些写入口会返回 409／`FINANCE_BASIS_UNKNOWN`，不会伪造预算保存成功；定向测试使用固定 A 桩验证接口边界。A02 接入后由 `buildApp` 注入 `BudgetItemPort`，再做真实落库和版本联合验收。
+B01 的 HTTP、事务、幂等和响应组装已完成；日常 `buildApp` 现默认接入 A02 的真实项目写函数，接口会落入本人自然月 `budget_items`，返回新周期版本。测试仍可注入固定桩核对 B 入口。消费者自定义估价只参与规划，候选目录报价不写回项目，更不能以估价直接生成订单。
+
+### A02 月度预算与目标
+
+`POST /api/budget-periods` 创建本人借记账户的自然月 `draft`，账户资金版本必须匹配；同账户同月只允许一个周期。`GET /api/budget-periods` 和 `GET /api/budget-periods/:id` 返回本人周期、项目、`BudgetBasis` 和逐日状态。草稿可先添加收入、必要和任意自定义支出，即使余额快照缺失也不伪装可执行。当前月资金快照/还款事实完整后，本人通过 `POST /api/budget-periods/:id/activations` 明确确认必要开支，才转 `active`；确认为零记录 `necessities_confirmed_at`，资金事实不足仍拒绝激活。`PATCH /api/budget-periods/:id/savings-target` 必须由本人确认并给出理由，前后值留在 `budget_target_changes` 和预算事件中。所有写入口需要同源和幂等键，项目/目标更改需要当前周期版本；closed 周期、已进入购买意图或已承诺项目不能直接改写或取消。未来月份可以保留草稿，但不能用本月余额提前激活未来月。
 
 ### B02 需求草稿与预算草稿
 
 `POST /api/ai/planning-drafts` 保存严格结构化的待确认草稿，`GET /api/ai/planning-drafts/:id` 仅允许本人读取。未选账户／周期时，`periodId`、`expectedFinancialVersion`、`expectedPeriodVersion` 必须同时为 null；这类需求草稿保留用户明确给出的标题、日期、估价、必要／可调属性和约束，缺失字段由服务端列出，模型建议存放在独立 `suggestion` 对象中。关联预算周期时三个字段必须同时提供，并先调用 A03 的只读评估端口。
 
-草稿引用的目录商品必须仍为 active 且适用于对应日期。响应只包含草稿、缺失字段和可空评估摘要，不提供确认、执行或状态修改入口。新消费者 Agent 的独立工具目录只有读取预算依据、查询登记商品和保存草稿三项，不包含建单、付款、暂停购买或提交变更。当前无账户需求草稿可以使用；关联周期的预算草稿在 A03 未接入时返回 409／`FINANCE_BASIS_UNKNOWN`。
+草稿引用的目录商品必须仍为 active 且适用于对应日期。响应只包含草稿、缺失字段和可空评估摘要，不提供确认、执行或状态修改入口。新消费者 Agent 的独立工具目录只有读取预算依据、查询登记商品和保存草稿三项，不包含建单、付款、暂停购买或提交变更。当前无账户需求草稿可以使用；关联周期的预算草稿由 A03 评估，事实不足显示 `unknown`，授权撤回明确拒绝。
 
 B02 当前完成的是结构化 API、共享 schema、023 迁移、工具白名单和定向边界测试；`consumerPlanningAgentTools` 尚未接入现有 `agent-runtime` 的实际模型运行。因而 `model_source=validated_structured_v1` 只表示服务端保存前完成结构校验，不表示本次请求一定经过真实模型，也不表示新消费者 Agent 已能从自然语言直接调用这些工具。

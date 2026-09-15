@@ -23,6 +23,11 @@ export const quoteStatuses = ['valid', 'expired', 'withdrawn'] as const;
 export const purchaseIntentStatuses = ['proposed', 'confirmed', 'ordered', 'expired', 'rejected'] as const;
 export const budgetPeriodStatuses = ['draft', 'active', 'closed'] as const;
 
+export const financeAccountRevocationInput = z.object({
+  expectedStatus: z.literal('linked'),
+}).strict();
+export type FinanceAccountRevocationInput = z.infer<typeof financeAccountRevocationInput>;
+
 export const offerQuote = z.object({
   quoteId: uuid,
   catalogItemId: uuid,
@@ -67,6 +72,13 @@ export const savingsTargetChangeInput = z.object({
   reason: z.string().trim().min(2).max(200),
   confirmedByUser: z.literal(true),
 }).strict();
+
+export const budgetPeriodActivationInput = z.object({
+  expectedFinancialVersion: version,
+  expectedPeriodVersion: version,
+  confirmedNecessities: z.literal(true),
+}).strict();
+export type BudgetPeriodActivationInput = z.infer<typeof budgetPeriodActivationInput>;
 
 export const budgetItemChangeInput = z.object({
   periodId: uuid,
@@ -247,6 +259,34 @@ export const verifiedMoneyEvent = z.object({
   message: '只有已核验事件才能记为支付或退款到账。',
 });
 
+export const budgetPeriodReview = z.object({
+  periodId: uuid,
+  accountId: uuid,
+  accountSource: z.enum(['demo', 'bank_api']),
+  periodStatus: z.enum(budgetPeriodStatuses),
+  monthStart: date,
+  monthEnd: date,
+  timezone: z.literal('Asia/Shanghai'),
+  originalSavingsTargetMinor: nonnegativeMinor,
+  currentSavingsTargetMinor: nonnegativeMinor,
+  targetChangeCount: z.number().int().nonnegative().safe(),
+  confirmedPeriodOutflowMinor: nonnegativeMinor,
+  confirmedPeriodInflowMinor: nonnegativeMinor,
+  classifiedUnexpectedExpenseMinor: nonnegativeMinor,
+  confirmedOrderPaymentsMinor: nonnegativeMinor,
+  confirmedRefundReceivedMinor: nonnegativeMinor,
+  refundRequestedMinor: nonnegativeMinor,
+  refundChannelVerifiedMinor: nonnegativeMinor,
+  channelRefundSucceededMinor: nonnegativeMinor,
+  refundAwaitingArrivalMinor: nonnegativeMinor,
+  currentConfirmedCashMinor: nonnegativeMinor.nullable(),
+  currentCashAsOf: instant.nullable(),
+  periodEndUnspentCashMinor: nonnegativeMinor.nullable(),
+  periodEndTargetGapMinor: nonnegativeMinor.nullable(),
+  reviewStatus: z.enum(['provisional', 'complete', 'unknown']),
+  unknownIssues: z.array(z.string().trim().min(1).max(80)),
+}).strict();
+
 export const consumerApiErrorCodes = [
   'UNAUTHENTICATED', 'RESOURCE_FORBIDDEN', 'VALIDATION_ERROR', 'FINANCE_SCOPE_REVOKED',
   'AMOUNT_OUT_OF_RANGE', 'IDEMPOTENCY_CONFLICT', 'VERSION_CONFLICT',
@@ -273,6 +313,7 @@ export type FundingAssessment = z.infer<typeof fundingAssessment>;
 export type PurchaseIntentCreateInput = z.infer<typeof purchaseIntentCreateInput>;
 export type PurchaseIntentConfirmInput = z.infer<typeof purchaseIntentConfirmInput>;
 export type VerifiedMoneyEvent = z.infer<typeof verifiedMoneyEvent>;
+export type BudgetPeriodReview = z.infer<typeof budgetPeriodReview>;
 export type OfferQuote = z.infer<typeof offerQuote>;
 export type BudgetItemView = z.infer<typeof budgetItemView>;
 export type BudgetAdjustmentConfirmInput = z.infer<typeof budgetAdjustmentConfirmInput>;

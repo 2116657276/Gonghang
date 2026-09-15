@@ -28,6 +28,18 @@ export async function createConfirmedOrder(client: PoolClient, user: AuthUser, r
   if (user.role !== 'consumer') forbidden();
   const input = createOrderInput.strict().parse(rawInput);
 
+  // The legacy plan budget does not include the new account-wide commitments.
+  // A consumer with an active finance-backed period must use B04 -> A05 instead;
+  // legacy order reads, handoffs and aftercare remain available.
+  const newFinanceFlow = await client.query(`SELECT 1 FROM finance_accounts a
+    JOIN budget_periods p ON p.primary_account_id=a.id AND p.owner_id=a.owner_id
+    WHERE a.owner_id=$1 AND a.account_type='debit' AND a.status='linked'
+      AND p.status='active' LIMIT 1 FOR UPDATE OF a`, [user.id]);
+  if (newFinanceFlow.rowCount) {
+    throw new AppError(409, 'LEGACY_PURCHASE_DISABLED',
+      '已有新资金规划账户，请使用新购买意图与本人确认流程；旧订单仍可查看和售后。');
+  }
+
   const confirmation = await client.query<{ plan_id: string; owner_id: string; type:string; snapshot:{proposal?:{items?:Array<{planItemId:string;catalogItemId:string;priceMinor:number;ruleVersion:number}>}} }>('SELECT plan_id, owner_id, type, snapshot FROM confirmations WHERE id = $1', [input.confirmationId]);
   const confirmationRow = confirmation.rows[0];
   if (!confirmationRow || confirmationRow.owner_id !== user.id || confirmationRow.type !== 'purchase') notFound('未找到购买确认记录。');

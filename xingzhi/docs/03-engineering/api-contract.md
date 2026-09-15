@@ -6,11 +6,11 @@
 | --- | --- |
 | 文档编号 | XZ-API |
 | 更新日期 | 2026-09-15 |
-| 状态 | B-Ⅰ（B00—B02）接口已进入当前代码基线；A 侧财务服务、真实逐日评估、消费者 Agent 运行接入及 B-Ⅱ／B-Ⅲ 接口仍是设计或待联合验收 |
+| 状态 | B-Ⅰ（B00—B02）接口及 A00—A06 已进入当前代码基线；B03—B06 交易/渠道接线、消费者 Agent 运行接入及联合验收仍待完成 |
 | 适用范围 | 账户范围、轻量流水、30 天规划、登记目录、消费执行、计划变化和支付适配 |
 | 实施顺序 | M1 后端迁移与接口 → M2 前端统一工作区 → M3 集中验收 |
 
-本文件替换原“出行计划与善后”接口文档。路径前缀、用户确认、订单、支付、退款、幂等和权限规则沿用当前实现；新增的账户和完整资金规划接口明确标为“拟新增”。B00—B02 已实现的接口单独列在第二章第 2.5 节；A 侧账户事实、真实预算写入／逐日评估以及 B03 之后的交易闭环仍待实现。SQL、种子和定向验证的实际进度见开发计划与验证策略。
+本文件替换原“出行计划与善后”接口文档。路径前缀、用户确认、订单、支付、退款、幂等和权限规则沿用当前实现；完整资金规划与新购买接口仍按实际进度区分。B00—B02 已实现的接口单独列在第二章第 2.5 节；A00—A06 的后端能力已接入。B03—B06 购买/渠道实际接线、支付闭环仍待实现。SQL、种子和定向验证的实际进度见开发计划与验证策略。
 
 ## 一、公共约定
 
@@ -135,13 +135,23 @@
 
 B00 的 `GET /api/offers`、`GET /api/offers/:id/quote` 以及 B01 的预算项目新增／修改／取消入口已经注册。B02 新增 `POST /api/ai/planning-drafts` 和 `GET /api/ai/planning-drafts/:id`。写草稿要求消费者会话、同源请求和 `Idempotency-Key`；读取只返回本人草稿，不提供通用状态修改入口。
 
-草稿请求固定为 `{ periodId, expectedFinancialVersion, expectedPeriodVersion, items }`，成功响应外层为 `{ data, meta }`。前三项必须同时为 null 或同时有值。每个 item 只允许 `title`、可空 `plannedOn`、可空 `userEstimatedAmountMinor`、可空 `priority`、`requirements`、可空 `catalogItemId` 和可空 `suggestion`；`suggestion` 使用独立的 `estimatedAmountMinor`，不能覆盖用户估价。`data` 返回 `{ draftId, periodId, status, basisFinancialVersion, basisPeriodVersion, items, missingFields, assessment }`；无账户需求草稿的 assessment 为 null，预算草稿必须取得 A03 的只读摘要。当前默认服务未注入 A03，预算草稿会返回 `FINANCE_BASIS_UNKNOWN`；只有注入 A03 桩或真实实现后才会返回评估摘要。
+草稿请求固定为 `{ periodId, expectedFinancialVersion, expectedPeriodVersion, items }`，成功响应外层为 `{ data, meta }`。前三项必须同时为 null 或同时有值。每个 item 只允许 `title`、可空 `plannedOn`、可空 `userEstimatedAmountMinor`、可空 `priority`、`requirements`、可空 `catalogItemId` 和可空 `suggestion`；`suggestion` 使用独立的 `estimatedAmountMinor`，不能覆盖用户估价。`data` 返回 `{ draftId, periodId, status, basisFinancialVersion, basisPeriodVersion, items, missingFields, assessment }`；无账户需求草稿的 assessment 为 null，预算草稿取得 A03 的只读摘要。日常服务已注入真实 A03；资金事实不足时摘要为 `unknown`，账户撤回时返回 `FINANCE_SCOPE_REVOKED`，仍不产生购买授权。
 
 023 已允许需求草稿的周期和两个依据版本成组为空，并补 owner 直接外键。当前代码已定义并定向验证新消费者 Agent 工具白名单，仅含 `read_budget_basis`、`search_offers`、`save_planning_draft`；该白名单尚未接入现有 Agent 运行入口，不能据此声称真实模型已经调用这些工具。旧 Agent 的建单、付款、暂停和提交变更工具只属于历史已授权计划入口，不注册进新消费者工具目录。
 
+### 2.6 A06 当前资金事件与复盘接口
+
+受控内部 `applyVerifiedMoneyEvent(client, ownerId, VerifiedMoneyEvent, { appliedLedgerEntryId? })` 由 B05/B06 的**受信渠道适配器**在数据库事务中调用，不能通过消费者 HTTP 或模型工具直接写入。B 必须先核验渠道来源与稳定 `providerEventId`；A 核本人新订单、原周期借记账户、订单环境/提供方、金额和账户来源。`payment_posted`/`refund_posted` 必须附 `appliedLedgerEntryId` 且该流水已经 posted、与原订单及金额/方向/来源一致；非到账事件不允许附流水。渠道 pending/unknown/退款申请或仅渠道确认不增加执行现金。Demo simulation 只接受 Demo 来源；支付宝 sandbox 回执不是工行银行流水。重复同内容事件复用原 `eventId`，重用编号改内容或重复引用一条已入账流水返回冲突。024、025 依次增加数据库层不可改写和防直接写表绕过约束。
+
+`GET /api/budget-periods/:id/review` 仅本人消费者可读，响应为 `{ data: BudgetPeriodReview, meta: {} }`；共享结构见 `packages/contracts/src/consumer-backend.ts`。分别返回 `originalSavingsTargetMinor/currentSavingsTargetMinor`、周期内 posted 收支、按原订单归属的已核付款/实际退款、`refundRequestedMinor/refundChannelVerifiedMinor/channelRefundSucceededMinor/refundAwaitingArrivalMinor`、本次可确认现金与 `unknownIssues`。`periodEndUnspentCashMinor` 和 `periodEndTargetGapMinor` 只有 closed 周期存在精确上海月末 observed 余额快照时才非 null；其语义是“月末未用现金和目标缺口”，并非已转入储蓄账户的金额。关闭后的晚到到账仍回到原订单复盘，但不倒填月末余额。旧无 budget period 的交易仍用历史查询/恢复接口。B05/B06 运行接线和真实银行/沙盒连续链尚未验证。
+
+### 2.7 A02 当前月度预算接口
+
+`POST /api/budget-periods` 正文 `{ accountId, monthStart, savingsTargetMinor, expectedFinancialVersion }`，创建本人借记账户的自然月 draft；同账户同月不可重复。`GET /api/budget-periods`／`GET /api/budget-periods/:id` 只读本人周期、全部项目、`BudgetBasis` 和逐日结果，事实或生命周期不满足时返回 unknown 而非假定零开支。`POST /api/budget-periods/:id/activations` 正文 `{ expectedFinancialVersion, expectedPeriodVersion, confirmedNecessities: true }`，仅当前月 draft 且 observed 可覆盖余额和还款事实齐全时激活；026 的 `necessities_confirmed_at` 明确记录用户确认为零必要开支的情况。`PATCH /api/budget-periods/:id/savings-target` 正文 `{ newTargetMinor, expectedPeriodVersion, reason, confirmedByUser: true }`，本人确认后写目标前后值审计和预算事件。上述写接口均要求消费者会话、同源及 `Idempotency-Key`，响应为 `{ data: { period, items, basis, forecast, targetChangeId? }, meta }`；目标不变时 `targetChangeId=null` 且不加版本。B01 的项目入口现默认注入 A02 内部事务写函数；新增自定义估价只作预算，不构成商品报价和下单许可。
+
 ## 三、M1 拟新增的财务接口
 
-以下路径和字段是设计目标，当前不存在。首版账户来自预置 Demo 或银行未来提供的授权适配器；不存在让用户把银行登录密码提交给行止的流程。
+以下路径和字段包含已实现的部分及后续设计目标，具体进度以上述状态和代码为准。首版账户来自预置 Demo 或银行未来提供的授权适配器；不存在让用户把银行登录密码提交给行止的流程。
 
 ### 3.1 账户和余额
 
