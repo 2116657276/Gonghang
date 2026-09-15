@@ -170,12 +170,62 @@ export const budgetAdjustmentConfirmInput = z.object({
   confirmedByUser: z.literal(true),
 }).strict();
 
+export const planningDraftSuggestion = z.object({
+  title: z.string().trim().min(1).max(120).nullable(),
+  plannedOn: date.nullable(),
+  estimatedAmountMinor: positiveMinor.nullable(),
+  priority: z.enum(budgetItemPriorities).nullable(),
+  catalogItemId: uuid.nullable(),
+  reason: z.string().trim().min(2).max(300),
+}).strict();
+
+export const planningDraftItem = z.object({
+  title: z.string().trim().min(1).max(120),
+  plannedOn: date.nullable(),
+  userEstimatedAmountMinor: positiveMinor.nullable(),
+  priority: z.enum(budgetItemPriorities).nullable(),
+  requirements: z.array(z.string().trim().min(1).max(200)).max(20),
+  catalogItemId: uuid.nullable(),
+  suggestion: planningDraftSuggestion.nullable(),
+}).strict();
+
 export const planningDraftInput = z.object({
-  periodId: uuid,
-  goalText: z.string().trim().min(2).max(500),
-  constraints: z.array(z.string().trim().min(1).max(200)).max(20),
-  expectedFinancialVersion: version,
-  expectedPeriodVersion: version,
+  periodId: uuid.nullable(),
+  expectedFinancialVersion: version.nullable(),
+  expectedPeriodVersion: version.nullable(),
+  items: z.array(planningDraftItem).min(1).max(20),
+}).strict().superRefine((input, context) => {
+  const empty = input.periodId === null
+    && input.expectedFinancialVersion === null
+    && input.expectedPeriodVersion === null;
+  const complete = input.periodId !== null
+    && input.expectedFinancialVersion !== null
+    && input.expectedPeriodVersion !== null;
+  if (!empty && !complete) context.addIssue({
+    code: z.ZodIssueCode.custom,
+    path: ['periodId'],
+    message: '周期和两个依据版本必须同时为空或同时提供。',
+  });
+});
+
+export const planningDraftAssessment = z.object({
+  status: z.enum(fundingStatuses),
+  shortfallMinor: nonnegativeMinor.nullable(),
+  affectedDates: z.array(date),
+  reasonCodes: z.array(z.string().trim().min(1).max(80)),
+}).strict().refine((assessment) => assessment.shortfallMinor !== null || assessment.status === 'unknown', {
+  path: ['shortfallMinor'], message: '只有未知评估可以没有明确缺口金额。',
+});
+
+export const planningDraftView = z.object({
+  draftId: uuid,
+  periodId: uuid.nullable(),
+  status: z.enum(['draft', 'accepted', 'discarded', 'stale']),
+  basisFinancialVersion: version.nullable(),
+  basisPeriodVersion: version.nullable(),
+  items: z.array(planningDraftItem).min(1).max(20),
+  missingFields: z.array(z.string().trim().min(1).max(120)).max(60),
+  assessment: planningDraftAssessment.nullable(),
 }).strict();
 
 export const verifiedMoneyEvent = z.object({
@@ -198,7 +248,7 @@ export const verifiedMoneyEvent = z.object({
 });
 
 export const consumerApiErrorCodes = [
-  'UNAUTHENTICATED', 'RESOURCE_FORBIDDEN', 'VALIDATION_ERROR',
+  'UNAUTHENTICATED', 'RESOURCE_FORBIDDEN', 'VALIDATION_ERROR', 'FINANCE_SCOPE_REVOKED',
   'AMOUNT_OUT_OF_RANGE', 'IDEMPOTENCY_CONFLICT', 'VERSION_CONFLICT',
   'QUOTE_STALE', 'ITEM_NOT_ORDERABLE', 'INSUFFICIENT_FUNDS',
   'SAVINGS_TARGET_AT_RISK', 'FINANCE_BASIS_UNKNOWN',
@@ -226,3 +276,29 @@ export type VerifiedMoneyEvent = z.infer<typeof verifiedMoneyEvent>;
 export type OfferQuote = z.infer<typeof offerQuote>;
 export type BudgetItemView = z.infer<typeof budgetItemView>;
 export type BudgetAdjustmentConfirmInput = z.infer<typeof budgetAdjustmentConfirmInput>;
+export type PlanningDraftInput = z.infer<typeof planningDraftInput>;
+export type PlanningDraftItem = z.infer<typeof planningDraftItem>;
+export type PlanningDraftAssessment = z.infer<typeof planningDraftAssessment>;
+export type PlanningDraftView = z.infer<typeof planningDraftView>;
+
+export const budgetItemCancelInput = z.object({
+  periodId: uuid,
+  itemId: uuid,
+  expectedPeriodVersion: version,
+  reason: z.string().trim().min(2).max(200),
+}).strict();
+export type BudgetItemCancelInput = z.infer<typeof budgetItemCancelInput>;
+export type BudgetItemMutationResult = { item: BudgetItemView; basis: BudgetBasis };
+
+export const offerSearchInput = z.object({
+  plannedOn: date,
+  categoryCode: z.string().trim().min(1).max(80).optional(),
+}).strict();
+export const offerView = z.object({
+  id: uuid, code: z.string(), name: z.string(), description: z.string(),
+  categoryCode: z.string().nullable(), locationLabel: z.string().nullable(),
+  tags: z.array(z.string()), purchaseMode: z.enum(['listing', 'orderable']),
+  displayPriceMinor: nonnegativeMinor, currency: z.literal('CNY'),
+  ruleLabel: z.string(),
+}).strict();
+export type OfferView = z.infer<typeof offerView>;

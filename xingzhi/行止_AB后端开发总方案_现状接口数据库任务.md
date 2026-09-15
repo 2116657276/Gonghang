@@ -1,6 +1,8 @@
 # 行止消费者产品：A/B 后端开发总方案
 
-更新日期：2026-09-15。本文只整理现状和开发任务，不表示本文所列业务 API 已经上线。本阶段两名开发者先完成后端，前端不排期。
+> 2026-09-15 实施更新：B-Ⅰ（阶段 0、B00—B02）接口独立开发已完成；A 独立环境与交接确认尚未核验。实际连接库已从 012 增量迁移到 023，当前保留 24 条历史订单。目录报价、预算项目及规划草稿入口已注册；B01／预算分支 B02 在相应 A 端口接入前返回 `FINANCE_BASIS_UNKNOWN`，固定 A 桩只用于定向测试。B03—B07 及 A 资金函数尚未完成。详细证据见 [验证记录](docs/04-quality/verification.md#九b02-接口独立开发记录)。下文“当前缺口”描述以本次更新和代码为准。
+
+更新日期：2026-09-15。本文只整理现状和开发任务，不表示本文所列业务 API 已经上线。本阶段两名开发者先完成后端，前端不排期。本文同时作为 A/B 的实施分工和交接基线；遇到旧实现与本文冲突时，先保留历史交易可读与善后能力，再按本文为新消费者流程增加独立路径，不用兼容名义绕过资金准入、本人确认或来源边界。
 
 ## 1. 项目要做什么
 
@@ -12,13 +14,13 @@
 
 | 领域 | 已完成的事实 | 仍缺少的部分 |
 | --- | --- | --- |
-| 数据库 | 本机 PostgreSQL `xingzhi_dev` 已应用 001–022；013–015 财务/30 天结构、016–022 月度预算与交易兼容结构均已建；迁移前备份保存在 Git 忽略的 `.local-secrets/xingzhi_dev_before_016_2026-09-15.dump` | 新表仍无正式演示数据；资金计算、报价联动、支付/退款核验的业务写入未实现；未做完整真实银行数据审计 |
-| 历史交易 | Fastify 的旧计划/目录/订单/授权/Agent/Worker/支付宝沙盒流程存在；本机历史订单 2 条，增量迁移没有删除它们 | 旧建单只检查旧计划购买上限，**没有**新月度资金准入；旧 Worker/Agent 不认识新预算周期及新订单形状 |
-| 共同契约 | `packages/contracts/src/consumer-backend.ts` 已导出严格的请求/响应校验、状态枚举和 TypeScript 类型；旧共享类型继续保留 | 新消费者路由尚未注册；内部最终准入函数、统一新响应适配和完整 API 集成测试尚未写 |
-| 产品规划 | 已确定消费者目标、估价/报价分离、月度目标、逐日现金流、意外调整、安全确认和 A/B 模块界线 | AI 草案、用户自定义每日项目入口、报价意图、储蓄复盘仍未成为可运行的新闭环 |
-| 验证 | 迁移器已应用 016–022；回滚探针验证账户/周期版本各从 1 增至 2、Demo 报价可过期；契约/服务端/Web 类型检查通过 | 后端旧定向测试曾 55/55，后续完整运行有旧 Agent 测试 54/55 的不稳定现象：全局 `agent_wakeups` 计数短时为 1；单独文件 13/13，原因待隔离；新消费者流程没有业务测试 |
+| 数据库 | 本机 PostgreSQL `xingzhi_dev` 已应用 001–023；023 允许无账户需求草稿并保留预算草稿关联约束；迁移前备份保存在 Git 忽略的 `.local-secrets/before-b00-20260915.dump` | 新表仍无正式资金演示数据；资金计算、支付/退款核验的业务写入未实现；未做完整真实银行数据审计 |
+| 历史交易 | Fastify 的旧计划/目录/订单/授权/Agent/Worker/支付宝沙盒流程存在；本机历史订单 24 条，增量迁移前后按原字段逐行一致 | 旧建单只检查旧计划购买上限，**没有**新月度资金准入；旧 Worker/Agent 不认识新预算周期及新订单形状 |
+| 共同契约 | `packages/contracts/src/consumer-backend.ts` 已导出严格的请求/响应校验、状态枚举和 TypeScript 类型；B00、B01、B02 路由已注册，旧共享类型继续保留 | A02 项目写函数、A03 逐日评估、内部最终准入函数和完整 API 集成测试尚未写；B01/B02 目前仍是 B 侧桩验收 |
+| 产品规划 | 已确定消费者目标、估价/报价分离、月度目标、逐日现金流、意外调整、安全确认和 A/B 模块界线；B02 需求／预算草稿边界已落入 API | 真实账户与预算事实、消费者 Agent 运行接入、报价意图、交易闭环和储蓄复盘仍未成为可运行的新闭环 |
+| 验证 | 迁移器已应用 016–023；回滚探针验证账户/周期版本各从 1 增至 2、Demo 报价可过期；契约/服务端/Web 类型检查通过；B00、B01、B02 定向测试通过 | 后端旧定向测试曾 55/55，后续完整运行有旧 Agent 测试 54/55 的不稳定现象：全局 `agent_wakeups` 计数短时为 1；单独文件 13/13，原因待隔离；新消费者真实资金与模型运行仍未验证 |
 
-2026-09-15 只读核对：迁移 22 条、`orders` 2 行、`finance_accounts`/`budget_periods`/`budget_items`/`offer_quotes`/`purchase_intents`/`finance_money_events` 各 0 行。**特别注意交接**：数据库“本机已应用”不等于队友已能从远端拉取；两人分开开发前，应核对远端 `huixiang` 分支确实包含 013–022 迁移、新契约和本方案，再在各自的 PostgreSQL 上执行迁移。本机数据库实例、历史订单与备份不会通过 Git 自动同步。
+2026-09-15 只读核对：迁移 23 条、`orders` 24 行、`offer_quotes` 2 行、`finance_accounts`/`budget_periods`/`budget_items`/`planning_drafts` 各 0 行。**特别注意交接**：数据库“本机已应用”不等于队友已能从远端拉取；两人分开开发前，应核对远端 `jianlin` 分支确实包含 013–023 迁移、新契约、B02 实现和本方案，再在各自的 PostgreSQL 上执行迁移。本机数据库实例、历史订单与备份不会通过 Git 自动同步。
 
 ## 3. 技术边界与一条因果链
 
@@ -85,7 +87,7 @@ A 负责受控 Demo/未来银行适配的真实性、快照覆盖游标、晚到
 
 旧 `payment_attempts`、`payment_notifications`、`jobs`、`idempotency_records`、`manual_tasks`、`authorizations` 等仍在。B 应逐表检查旧 Worker 对 `plan_id`/`merchant_id` 非空的假设，新订单不满足这些旧假设；不得因为数据库接受新行就让旧 Worker 直接处理。
 
-## 5. A/B 共用的接口契约（已定义类型，目标路由待开发）
+## 5. A/B 共用的接口契约（主体类型已定义，目标路由待开发）
 
 权威类型文件：`packages/contracts/src/consumer-backend.ts`，由 `packages/contracts/src/index.ts` 导出。JSON 使用 camelCase；数据库列名 snake_case。消费者身份来自后端会话，请求体不收 `ownerId/actorUserId/source=bank_api/settledLedgerEntryId` 等受信字段。金额为安全整数分与 `CNY`；日期为有效 `YYYY-MM-DD`、周期时区 `Asia/Shanghai`，瞬时时间 ISO 8601 带时区。缺失资金事实为 `null+dataStatus=unknown`，不填 0。
 
@@ -94,6 +96,7 @@ A 负责受控 Demo/未来银行适配的真实性、快照覆盖游标、晚到
 | DTO | 字段与语义 | 提供方 → 使用方 |
 | --- | --- | --- |
 | `BudgetItemChangeInput` | `periodId, itemId/null, expectedPeriodVersion, kind, title, categoryCode/null, plannedOn, userEstimatedAmountMinor, priority, changeReason`；必要支出 priority=required，不含商户报价 | B 消费者入口 → A 保存与重算 |
+| `BudgetItemCancelInput` | `periodId, itemId, expectedPeriodVersion, reason`；只取消尚未结算且未进入订单承诺的项目，不删除原记录 | B 消费者入口 → A 取消与重算；阶段 0 已补共享类型 |
 | `BudgetBasis` | `accountId, periodId, currency, financialVersion, periodVersion, basisSnapshotId/null, asOf/null, confirmedCashMinor/null, savingsTargetMinor, essentialRemainingMinor, adjustablePlannedMinor, committedOrdersMinor, expectedIncomeMinor, pendingRefundMinor, minimumProjectedCashMinor/null, minimumCashOn/null, dataStatus` | A 计算 → B/Agent 只读 |
 | `AssessPurchaseInput` | `periodId, budgetItemId, quoteId, expectedFinancialVersion, expectedPeriodVersion, expectedQuoteVersion, mode=preview`；报价/金额由服务端读，不信客户端自报 | B → A 预览 |
 | `FundingAssessment` | `assessmentId, accountId, periodId, budgetItemId, quoteId, basisSnapshotId, financialVersion, periodVersion, quoteVersion, quotedAmountMinor, replacedEstimateMinor, incrementalImpactMinor, status, shortfallMinor, affectedDates, reasonCodes, expiresAt` | A → B 展示/建立待确认意图 |
@@ -110,12 +113,15 @@ A 负责受控 Demo/未来银行适配的真实性、快照覆盖游标、晚到
 | 路径 | 请求/响应关键内容 | 开发者 |
 | --- | --- | --- |
 | `GET /api/finance/accounts` | 本人账户脱敏目录、授权/来源/时间 | A |
+| `POST /api/finance/accounts/:id/revocations` | 本人撤回账户授权；幂等保留历史，阻止新评估、确认、建单和首次支付交接，不阻断既有订单善后 | A；B 消费并透传撤回错误 |
 | `POST /api/budget-periods`、`GET /api/budget-periods/:id` | 创建月度周期；返回本人 `BudgetBasis`、项目、逐日风险、未知依据和版本 | A |
 | `PATCH /api/budget-periods/:id/savings-target` | 本人直接确认目标变化、理由、前后值和审计 ID | A |
-| `POST/PATCH /api/budget-periods/:id/items` | B 接收自定义/必要/收入项目，A 受控写入；路径 periodId 与正文一致 | B 入口，A 内部写函数 |
+| `POST /api/budget-periods/:id/items` | 新增自定义/必要/收入项目；正文 `itemId=null`，路径 periodId 与正文一致 | B 入口，A 内部写函数 |
+| `PATCH /api/budget-periods/:id/items/:itemId` | 修改尚未承诺项目；路径 periodId/itemId 与正文一致 | B 入口，A 内部写函数 |
+| `POST /api/budget-periods/:id/items/:itemId/cancellations` | 取消尚未结算且未进入订单承诺的项目，保留原记录与事件 | B 入口，A 内部取消函数 |
 | `POST /api/finance/assessments` | `mode=preview`，短时资金评估，不执行 | A |
 | `POST /api/ai/planning-drafts` | 仅结构化草案、说明、受控数据范围，不执行 | B |
-| `GET /api/offers`、`GET /api/offers/:id/quote` | 目录与有效报价，来源/规则/过期/服务日期 | B |
+| `GET /api/offers`、`GET /api/offers/:id/quote` | 目录与当前有效报价，来源/规则/过期/服务日期；GET 只读，不在请求内创建报价 | B |
 | `POST /api/purchase-intents`、`POST /api/purchase-intents/:id/confirm` | 报价/评估/待确认 → 本人显式确认、最终准入、订单或拒绝 | B，确认事务调用 A |
 | `POST /api/orders/:id/payment-handoff` | 本人订单交接/业务号/operationId/未知状态 | B |
 | `POST /api/emergencies/assess`、`POST /api/adjustments/:id/confirm` | 变化选项逐项核算 → 本人确认后调整/取消/退款受理 | B 编排，A 财务判断/写入 |
@@ -123,19 +129,35 @@ A 负责受控 Demo/未来银行适配的真实性、快照覆盖游标、晚到
 
 统一普通响应目标：`{ data, meta: { financialVersion?, periodVersion?, quoteVersion?, asOf?, source? } }`；异步 HTTP 202 返回 `operationId,state=accepted`，不表示付款成功。错误目标：`{ error: { code, message, details? }, correlationId }`。写请求要求 `Idempotency-Key`，变更/确认要求预期版本；同一主体/路径/键且规范化参数相同返回原结果，参数不同 409。客户端不能用 `confirmedByUser=true` 代替会话归属、明确确认范围和服务端准入。Agent/Worker/渠道适配器不得调用消费者确认入口替用户点击。
 
-统一状态：周期 `draft|active|closed`；项目 `planned|committed|settled|cancelled`；报价 `valid|expired|withdrawn`；评估 `allowed|needs_adjustment|blocked|unknown`；购买意图 `proposed|confirmed|ordered|expired|rejected`。只有**新鲜 allowed + 最终事务复核**才可落单。错误码来自 `consumerApiErrorCodes`：`UNAUTHENTICATED, RESOURCE_FORBIDDEN, VALIDATION_ERROR, AMOUNT_OUT_OF_RANGE, IDEMPOTENCY_CONFLICT, VERSION_CONFLICT, QUOTE_STALE, ITEM_NOT_ORDERABLE, INSUFFICIENT_FUNDS, SAVINGS_TARGET_AT_RISK, FINANCE_BASIS_UNKNOWN, PROVIDER_RESULT_UNKNOWN, CONFIRMATION_REQUIRED, CONFIRMATION_SCOPE_MISMATCH`。旧 API 的 `fits|requires_change|conditional|unknown` 与旧错误形状只能由兼容层映射，conditional 不能当 allowed。
+统一状态：周期 `draft|active|closed`；项目 `planned|committed|settled|cancelled`；报价 `valid|expired|withdrawn`；评估 `allowed|needs_adjustment|blocked|unknown`；购买意图 `proposed|confirmed|ordered|expired|rejected`。只有**新鲜 allowed + 最终事务复核**才可落单。错误码来自 `consumerApiErrorCodes`：`UNAUTHENTICATED, RESOURCE_FORBIDDEN, VALIDATION_ERROR, AMOUNT_OUT_OF_RANGE, IDEMPOTENCY_CONFLICT, VERSION_CONFLICT, QUOTE_STALE, ITEM_NOT_ORDERABLE, INSUFFICIENT_FUNDS, SAVINGS_TARGET_AT_RISK, FINANCE_BASIS_UNKNOWN, PROVIDER_RESULT_UNKNOWN, CONFIRMATION_REQUIRED, CONFIRMATION_SCOPE_MISMATCH`。账户撤回统一返回 `FINANCE_SCOPE_REVOKED`；阶段 0 已将该枚举及 `BudgetItemCancelInput`、项目写入返回类型加入共享契约；A 函数待实现，签名见 `apps/server/src/domain/budget-port.ts`。本轮由 B 落入公共文件；A 后续按撤回语义及取消状态限制对接实现；双方不得另造近义错误或私有请求形状。旧 API 的 `fits|requires_change|conditional|unknown` 与旧错误形状只能由兼容层映射，conditional 不能当 allowed。
+
+### 5.3 开发前固定的内部交接与草稿边界
+
+以下是 A 侧与 B-Ⅱ／B-Ⅲ 仍待实现的交接契约；B01 所需类型和签名、B02 草稿 schema 已落入共享代码；不建立远程调用服务或第二套资金引擎。
+
+**项目写入：** A 提供 `applyBudgetItemChange(client, ownerId, input)` 与 `cancelBudgetItem(client, ownerId, input)`。`client` 是 B 外层事务的同一 `PoolClient`，`ownerId` 来自会话。B 负责 HTTP、路径与正文一致性、外层幂等记录和提交／回滚；A 负责账户→周期→项目的锁顺序、归属、版本、状态、预算事实写入和预算事件。返回 `{ item: BudgetItemView, basis: BudgetBasis }`，二者均代表该事务中的修改后状态；B 不另算风险、不再写一份预算事件。候选目录由 B 单独查询，不把报价检索塞进 A 写函数。取消只允许 planned 项；已 cancelled 且当前版本匹配时返回现状，不推进版本；committed/settled 必须走调整善后，不直接取消。旧版本仍返回 VERSION_CONFLICT，同一幂等键优先返回原结果。
+
+**AI 需求草稿与预算草案：** 复用 `planning_drafts` 的持久化和同一个 `POST /api/ai/planning-drafts` 入口。无账户需求请求使用 `periodId=null, expectedFinancialVersion=null, expectedPeriodVersion=null`；三个值必须同为空。预算草案三者必须都有值，校验本人周期及真实版本。无账户分支只提取用户明确提供的需求、日期、估价和约束，不判断资金可行性。023 已允许这三列成组为空、补 owner 到用户表的直接外键，并保留非空预算草稿的原周期归属约束；017 未改写。旧 `createPlanInput` 仍必须带商品，不能用来伪造空计划。
+
+B02 为模型输出和保存响应补充同一份严格模式：`{ draftId, periodId, status, basisFinancialVersion, basisPeriodVersion, items, missingFields }`。items 仅包含标题、日期或 null、用户估价或 null、必要／可调属性或 null、需求条件，以及可选目录引用；保留用户提供的值，模型建议值须单独标为建议，不覆盖原始输入。需求分支依据版本为 null；缺失字段显式列入 missingFields；目录引用须由 B 核实。预算草案另带 A 的只读评估摘要 `{ status, shortfallMinor, affectedDates, reasonCodes }`，shortfallMinor 可为 null 表示未知，事实不完整时 status=unknown。A03 提供 `assessPlanningDraft(client, ownerId, periodId, expectedFinancialVersion, expectedPeriodVersion, proposedItems)`，复用逐日算法在内存中评估建议，不写 budget_items 或 funding_assessments；B 核模型输出后调用，A 重读本人依据和版本。此摘要不等同于需要 quoteId 的购买评估。只读获取使用 `GET /api/ai/planning-drafts/:id`，仅本人可读；不暴露任意草稿状态 PATCH。
+
+用户选定账户和周期后，需求草稿仍保留为原始记录；用户通过 B01 逐项确认完整项目，必要时再基于该周期生成新预算草案，不把原草稿自动改为 active，不把缺失金额补零。首版不维护“整份草案已执行”状态或自动关联交易；表中 accepted 状态暂不由新入口写入。无账户分支与预算分支都不能确认选择或交易。
+
+**购买评估顺序：** 先请求 A 的 `POST /api/finance/assessments` 获取评估，再把 `assessmentId` 连同 quoteId、项目与三版本交给 B 的 `POST /api/purchase-intents`。B 校验同本人、同项目／报价、未到期、版本匹配且 status=allowed，绑定原评估，不在该接口重复生成评估。失效时明确返回对应错误，调用方重新评估。确认时仍由 A 在 B 的外层事务内重读事实并最终准入；持久化评估永远不是购买授权。
+
+**资金缺失与撤回：** 无有效快照时返回 FINANCE_BASIS_UNKNOWN，不创建要求非空 basisSnapshotId 的评估记录；已有快照但其他事实不足可保存 unknown 评估。账户撤回由 A01 实现固定接口：本人、Idempotency-Key、`expectedStatus=linked`；首次写 revoked/revokedAt，账户 financialVersion 及关联预算周期 version 各推进一次（复用数据库版本机制，不双加）；重复撤回不再推进。返回 `{ accountId, status, revokedAt, financialVersion, affectedPeriodIds }`。禁止新事实刷新、创建／重新关联周期、新评估、意图、确认、建单与首次付款交接，统一 FINANCE_SCOPE_REVOKED；本地历史读取及既有订单善后继续。通用目录和只读报价无账户入参，可以继续浏览，但不能据此取得购买资格。M2 显示撤回及最后快照时间，不再把该账户列为可选账户。
 
 ## 6. A 的详细开发任务：资金、预算、最终准入
 
 ### A00｜交接基线和稳定 Demo 事实
 
-- 输入：已应用 001–022、共享契约、当前空财务表和旧 seed；先确认基线迁移在双方工作区可见、数据库能重复迁移且不会覆盖历史订单。
+- 输入：已应用 001–023、共享契约、当前空财务表和旧 seed；先确认基线迁移在双方工作区可见、数据库能重复迁移且不会覆盖历史订单。
 - 实现：稳定的 `demo` 借记账户、脱敏标识、`observed` 且有 `available_balance_minor/as_of/covered_through_at` 的 ¥2,000 快照，以及本月 ¥500 目标、¥900 必要、¥400 可调样例；其中晚餐 ¥80 是 ¥400 的组成部分，不额外新增占用。Demo `source=demo`，密钥/测试账号放本地私密配置，不提交。
 - 产出：可重复初始化方式与一份固定 JSON/UUID 样例；二次运行不改变历史目录报价/订单规则。验收：账户、快照、预算周期/项目正确归属，旧 2 条订单不消失。
 
 ### A01｜账户、余额快照、流水和还款读取
 
-- 实现 `GET /api/finance/accounts` 和受控内部资金事实读取；只取本人已授权账户，区分 debit、credit、loan。使用 `as_of`/覆盖游标选择新鲜 observed 基准，晚到旧快照不替代新快照；已覆盖流水只用于展示，不重复补入余额。
+- 实现 `GET /api/finance/accounts`、账户撤回接口（按 5.3 节）和受控内部资金事实读取；目录允许返回本人已撤回账户的本地历史摘要，新事实读取只取本人已授权账户，区分 debit、credit、loan。使用 `as_of`/覆盖游标选择新鲜 observed 基准，晚到旧快照不替代新快照；已覆盖流水只用于展示，不重复补入余额。
 - 展示 pending/posted/reversed，预计收入、未核退款、信用额度和负债分开返回。`finance_obligations` 中账单覆盖分期、还款已结清、包含链循环和主还款账户由确定性逻辑处理。
 - 验收：跨用户账户不可读、撤销授权不可新建执行基准、快照缺覆盖/余额返回 unknown、信用额度不能使 blocked 变 allowed。
 
@@ -173,37 +195,38 @@ A 负责受控 Demo/未来银行适配的真实性、快照覆盖游标、晚到
 
 ### B00｜目录与稳定 Demo 报价
 
-- 审查 `catalog_items` 的 food、category、purchase_mode、available_from/to、取消规则和旧 seed 的 ON CONFLICT 更新行为；设计不会改变历史订单当时规则的 Demo 商品/报价初始化。
-- 实现 `GET /api/offers`、`GET /api/offers/:id/quote`；orderable 商品才有 `offer_quotes`，listing 只能推荐。报价记录独立于目录可变价，保存 provider、demo/channel_api 来源、服务日期、规则快照、quoteVersion、validUntil；价变新建记录。
+- 审查 `catalog_items` 的 food、category、purchase_mode、available_from/to、取消规则和旧 seed 的 ON CONFLICT 更新行为；设计不会改变历史订单当时规则的 Demo 商品/报价初始化。新 Demo 商品使用独立稳定 code，初始化不覆盖旧 A/B/C/D 的价格、规则或激活状态。B 提供商品与报价数据定义；若仍需修改共用 `db/seed.ts`，只由约定的合并人落入，避免与 A 的账户/预算种子同时改同一段。
+- 实现 `GET /api/offers`、`GET /api/offers/:id/quote`；目录查询至少支持 `plannedOn`，可选 `categoryCode`，只返回 active 且日期可用的商品。orderable 商品才有 `offer_quotes`，listing 只能推荐。报价记录独立于目录可变价，保存 provider、demo/channel_api 来源、服务日期、规则快照、quoteVersion、validUntil；价变新建记录。B00 的固定 Demo 报价由初始化过程预先写入，GET 只返回当前有效记录；以后如需渠道刷新，使用受控内部函数另建报价，不把写操作藏进 GET。
 - 验收：¥80 用户估价不等于 ¥99 报价；过期/撤回/禁用商品不再可买；Demo 来源不会显示成真实商户接口。
 
 ### B01｜消费者自定义每日项目与目标组织
 
-- 实现用户新增、编辑、改日期、取消尚未执行的项目入口，输入标题、分类、日期、估价、required/adjustable。新项目默认 planning_only；不要求先选择固定目录商品。
-- 路由校验共享 `budgetItemChangeInput`，调用 A 的受控项目写函数；B 不自行 UPDATE `budget_items` 金额或维护独立预算余量。返回估价、月度风险、可关联候选报价；服务端核 path periodId=body periodId。
+- 实现用户新增、编辑、改日期、取消尚未执行的项目入口，输入标题、分类、日期、估价、required/adjustable。预算项目在关联有效报价并通过购买意图前都只是规划事项；`budget_items` 不新增不存在的 `planning_only` 字段，也不要求先选择固定目录商品。
+- B 拥有该消费者 HTTP 路由、请求解析和响应组装；路由校验共享 `budgetItemChangeInput`，把同一事务上下文和规范化输入交给 A 的 `applyBudgetItemChange`。B 不自行 UPDATE `budget_items` 金额或维护独立预算余量。返回估价、月度风险、可关联候选报价；服务端核 path periodId=body periodId。
 - 验收：无商品项目可规划但无法通过订单入口；已承诺金额不能静默修改；同一幂等键重试不会再加一行。
 
 ### B02｜AI 草案和 Agent 工具权限
 
-- 基于 A `BudgetBasis`、B 的用户目标/每日项目/可买商品，生成结构化每日建议、可调项和意外情况选项，写 `planning_drafts`；模型输出必须通过模式校验、商品存在性校验和 A 逐日财务评估。
+- 基于 A `BudgetBasis`、B 的用户目标/每日项目/可买商品，生成结构化每日建议、可调项和意外情况选项，写 `planning_drafts`；模型输出必须通过模式校验与商品存在性校验；预算草案接入 A 的只读逐日评估，需求草稿按 5.3 节保留缺失事实。B-Ⅰ 使用桩时只证明结构、调用和权限，不宣称真实资金评估通过。
 - 对**新消费者流程**代码级限定模型工具为本人授权读取、生成/保存待确认草案。移除或隔离新流程对旧 `create_order/request_payment/pause_purchases/submit_change` 执行工具的访问；不能只在 prompt 写“请勿执行”。历史已授权订单善后如继续保留 Agent 执行工具，仍经原授权与统一最终准入，不允许扩大范围。
+- B-Ⅰ 不新增“整份草案一键执行”接口。无账户需求草稿、预算草案和读取入口按 5.3 节实现。草案被用户采用时，仍通过 B01 的结构化项目入口逐项写入预算并接受 A 的版本校验；草案保存成功不等于预算项目已经变化。
 - 最小化模型输入，不上传账户密钥、支付凭据、病史和不必要的逐笔流水；健身/饮食建议非医疗建议。验收：伪造模型建议不能创建订单、降储蓄目标或触发退款。
 
 ### B03｜购买意图、报价关联和待确认摘要
 
-- 实现 `POST /api/purchase-intents`；用户先选择真实 quoteId，B 核 quoteSource/有效期/商品规则，调用 A preview，展示估价、报价、差额、储蓄/逐日影响与取消规则。
+- 实现 `POST /api/purchase-intents`；按 5.3 节先取得 A preview，再提交 quoteId 与 assessmentId。B 核 quoteSource/有效期/商品规则和评估绑定关系，复用该评估展示估价、报价、差额、储蓄/逐日影响与取消规则，不重复调用 preview。
 - 仅对本人、同周期预算项目建立 `purchase_intents`，绑定 funding assessment、financial/period/quote 三版本和到期时间；needs_adjustment/blocked/unknown 不包装成“可以买”。商品报价变化要新报价、新评估、新意图，保留旧证据。
-- 用模拟 A 响应并行开发，交接时改接真实函数。验收：跨主人引用失败，同一项目不出现两个活跃意图，报价 ¥99 不能在确认阶段换成 ¥109。
+- 用本文固定的模拟 A 响应并行开发，模拟层只返回契约结果，不复制逐日资金算法；交接时替换为 A 的真实函数并删除运行路径中的模拟判断。验收：跨主人引用失败，同一项目不出现两个活跃意图，报价 ¥99 不能在确认阶段换成 ¥109。
 
 ### B04｜消费者确认、订单与支付交接
 
-- 实现 `POST /api/purchase-intents/:id/confirm`，只允许本人直接请求。核确认金额=有效报价、确认范围/规则/版本/到期；与 A 的最终准入在同一事务内把意图 confirmed→ordered、创建**新订单形状**（预算/意图有值，旧计划/商户/授权列为空），写预算事件。
+- 实现 `POST /api/purchase-intents/:id/confirm`，只允许本人直接请求。B 发起并控制唯一的外层数据库事务，把同一个 `PoolClient` 交给 A 的最终准入函数；核确认金额=有效报价、确认范围/规则/版本/到期，在该事务内完成意图 confirmed→ordered、创建**新订单形状**（预算/意图有值，旧计划/商户/授权列为空）和预算事件。A/B 不得各开事务，也不得在事务提交前发送支付请求。
 - 实现新订单读取与 `payment-handoff`；检查本人、报价、资金最新状态、固定支付业务号、幂等和环境。交接只能跳沙盒/受控支付适配，不替用户输入密码或宣称自动扣款。支付结果 unknown 时停止重试建单，使用原业务号复核。
 - 验收：账户级并发准入、重复确认/回调不重复下单，旧 2 条订单仍能按原字段查询和善后。
 
 ### B05｜Worker、新旧订单范围与支付/退款事件回传
 
-- 检查旧 Worker、jobs、operations、payment_attempts、refund_batches、manual_tasks 中 `plan_id/merchant_id/confirmation_id` 必定非空的代码假设；为新 `budget_period_id` 形状增加受控路径，不直接让旧路径读 NULL。
+- 检查旧 Worker、jobs、operations、payment_attempts、refund_batches、manual_tasks 中 `plan_id/merchant_id/confirmation_id` 必定非空的代码假设；为新 `budget_period_id` 形状增加受控路径，不直接让旧路径读 NULL。先完成新订单的最小支付交接与结果复核路径，再按实际调用链适配取消、退款和人工任务，不为新形状提前重构全部旧 Worker。
 - 受理/lease/恢复/复核继续保持固定业务号；支付成功、失败、未知、关单、取消、退款分批明确分状态。把受信渠道核验结果转成 `VerifiedMoneyEvent` 给 A，不能仅靠支付宝沙盒通知更新 Demo/银行现金。人工恢复是后端运营职责，不新增消费者可见商户管理员入口。
 - 验收：未知支付不会二次下单；退款申请、渠道成功、实际到账状态分明；并发 Worker 不重复应用事件。
 
@@ -218,19 +241,54 @@ A 负责受控 Demo/未来银行适配的真实性、快照覆盖游标、晚到
 - `budget_events` 记录建议、报价、确认、订单、结果、调整和善后的可追溯摘要；统一新 API `{data,meta}`、错误码和权限。前端本阶段不改，但提供可调用的路径、样例 JSON、运行步骤、Demo/沙盒限制与未知状态说明。
 - 与 A 共同完成从预算到复盘的消费者故事，不以商品分类数量或 AI 文案数量充当完成度。验收：仅凭 API 可演示完整因果链，证据不泄露密钥或模型思维链。
 
+### B 的三批交付和固定模拟 A 响应
+
+B 不同时铺开目录、Agent、交易和善后，按以下三批集中实现与验收：
+
+| 批次 | 内容 | 允许依赖 | 统一验收结果 |
+| --- | --- | --- | --- |
+| B-Ⅰ | B00—B02：目录、报价、每日项目入口、只读 AI 草案 | 共享契约、A 的固定 `BudgetBasis`/项目写入桩；不依赖真实购买准入 | 目录可查、草稿可保存、Agent 权限隔离；使用 A 桩的项目与资金结果仅算接口独立验收，真实保存与评估待 A 接入后联合验证 |
+| B-Ⅱ | B03—B04：购买意图、本人确认、新订单、支付交接 | A04 preview、A05 同事务 commit；账户撤回错误已进入共享契约 | 新鲜 allowed 才能本人确认并建一笔订单，提交后才能支付交接，旧订单仍可读 |
+| B-Ⅲ | B05—B07：Worker、资金事件、意外调整、取消退款和证据 | A06 资金事件与复盘接口 | 未知结果可恢复，退款申请/渠道成功/实际到账分离，完整 API 因果链可演示 |
+
+B-Ⅰ 可以使用固定模拟 A 响应推动开发；项目写入桩只注入定向测试，不注册为日常服务写接口。A 未就绪时对应路由不得返回伪成功。以下资金结果矩阵也供 B-Ⅱ 开发检查使用，但模拟层不得实现另一套资金算法，也不得进入生产式支付路径：
+
+| 场景 | 固定语义 | B 必须表现 |
+| --- | --- | --- |
+| `allowed` | ¥80 估价、¥99 报价、只替换增加 ¥19，版本与依据完整 | 可建立待确认意图，但仍不可自动确认或下单 |
+| `needs_adjustment` | 尚有调整方案，但当前购买会破坏约束 | 显示需调整，不显示为可直接购买 |
+| `blocked` | 逐日现金或储蓄目标明确不足 | 拒绝进入确认，展示短缺与受影响日期 |
+| `unknown` | 已有快照但跨月事实等不足；完全无有效快照时返回 FINANCE_BASIS_UNKNOWN | 停止购买链，不将未知金额补 0 |
+| `VERSION_CONFLICT` | preview 后账户或周期版本变化 | 废弃旧意图依据，重新读取和评估 |
+| `QUOTE_STALE` | 报价过期、撤回或版本变化 | 新建报价、评估和意图，保留旧证据 |
+| `FINANCE_SCOPE_REVOKED` | 主账户授权已撤回 | 阻止新评估、确认、建单和首次支付交接；既有订单善后继续 |
+
 ## 8. 两人怎么并行、在哪里必须会合
 
-现有代码定位：A 主要新增/维护账户、预算和财务核算路由与领域函数，并负责 Demo 资金事实；B 主要检查 `routes/api.ts`、`routes/agent.ts`、`domain/business-actions.ts`、`domain/agent-tools.ts`、`domain/worker-runtime.ts`、`domain/channel-worker.ts` 及目录/支付种子。现有 `db/seed.ts` 同时涉及 A/B 数据，约定一名合并人或各自先实现独立局部种子逻辑，不同时直接改同一段。`app.ts` 的路由注册、`packages/contracts/src/index.ts`、统一错误/幂等和同事务下单函数也是交汇文件，先约定合并人再改；两人不要同时在巨大的旧 `routes/api.ts` 内穿插新资金代码。可以新增小而直接的领域/路由文件，不必受旧文件布局束缚，也不为未来假想需求预建框架。
+现有代码定位：A 主要新增/维护账户、预算和财务核算路由与领域函数，并负责 Demo 资金事实；B 主要检查 `routes/api.ts`、`routes/agent.ts`、`domain/business-actions.ts`、`domain/agent-tools.ts`、`domain/worker-runtime.ts`、`domain/channel-worker.ts` 及目录/支付种子。两人不要同时在巨大的旧 `routes/api.ts` 内穿插新资金代码。可以新增小而直接的消费者路由/领域文件，不必受旧文件布局束缚，也不为未来假想需求预建框架。
+
+交汇文件采用单一落笔人，不用额外建立审批系统：
+
+| 交汇点 | 默认职责 | 合并规则 |
+| --- | --- | --- |
+| `db/seed.ts` | A 提供账户/预算事实，B 提供商品/报价定义 | 阶段 0 约定一名合并人；另一方提交独立定义或明确补丁位置，不同时改同一段 |
+| `app.ts` 与路由注册 | B 注册新消费者规划、目录、意图和交易路由；A 注册资金路由 | 同一批次由一名合并人处理，避免双方反复改注册顺序 |
+| `packages/contracts/src/index.ts`、消费者错误码 | 公共契约 | 修改前对照本文 DTO；阶段 0 补 `FINANCE_SCOPE_REVOKED` 与 `BudgetItemCancelInput`，落实 5.3 节项目写入的输入／返回签名；B02 再补草稿模式，双方按各自消费范围复核后使用 |
+| 幂等与错误适配 | 各领域复用既有实现，B 负责新消费者外层响应 | 不各自创建一套错误形状或幂等表；需要扩展时由当前调用链的合并人完成 |
+| 最终准入与建单 | B 控制外层事务，A 提供接收同一 `PoolClient` 的准入函数 | 固定账户优先锁顺序；任一检查失败整笔回滚；事务提交后才允许支付交接 |
+| 渠道结果与资金事实 | B 形成受信 `VerifiedMoneyEvent`，A 核验并应用 | 渠道成功不直接写余额；A 拒绝的事件保留待核，不由 B 绕过 |
 
 | 阶段 | A 独立交付 | B 独立交付 | 双方交接/门禁 |
 | --- | --- | --- | --- |
 | 0：基线同步（约 1–2 天） | Demo 账户/快照/预算样例 | Demo 商品/¥99 报价样例 | **先确认远端已包含迁移和契约**；核同一 JSON、错误、日期、锁顺序；不同时改同一公共文件 |
-| 1：可独立工作（约 3–5 天） | A01–A03，`BudgetBasis`、项目受控写函数 | B00–B02，项目入口、只读 AI 草案、报价 | B 用固定模拟 A 响应，A 用固定报价输入；无须等对方全完成 |
+| 1：可独立工作（约 3–5 天） | A01–A03，`BudgetBasis`、项目受控写函数 | B-Ⅰ（B00–B02），项目入口、只读 AI 草案、报价 | B 用本文固定模拟 A 响应，A 用固定报价输入；无须等对方全完成 |
 | 2：第一集成（约 3–5 天） | A04–A05，preview 与内部 commit | B03–B04，意图/本人确认/新订单 | 同一事务账户优先锁、版本/报价重读；跨计划防双花与旧入口策略通过才合并 |
 | 3：结果和意外（约 3–4 天） | A06，核验资金事件/复盘 | B05–B06，Worker/取消/退款/调整 | `VerifiedMoneyEvent` 去重、未知停机、退款到账分离、¥400 意外方案闭环 |
 | 4：后端验收（约 2–3 天） | 逐日现金流、授权/来源/资金测试 | Agent 权限、订单/Worker/接口测试 | 统一 API 文档、Demo 演示、旧订单恢复；前端只收契约，本阶段不排 UI |
 
-两人分别维护自己的领域文件；共享契约、跨表迁移和同事务函数由双方审核。分支可以各自开发，但不能各自修改已执行的 013–022 或产生相同迁移编号。对需要补字段的真实缺口追加 023+，不得重写已执行 SQL、清库或删除旧表。涉及历史订单、资金事件、授权或隐私的修改先对照本文件约束并做定向验证。
+两人分别维护自己的领域文件；共享契约、跨表迁移和同事务函数由双方审核。分支可以各自开发，但不能各自修改已执行的 001–023 或产生相同迁移编号。对需要补字段的真实缺口追加 024+，不得重写已执行 SQL、清库或删除旧表。涉及历史订单、资金事件、授权或隐私的修改先对照本文件约束并做定向验证。
+
+阶段 0 的完成判定是：双方代码基线均含 013–023 和 `consumer-backend.ts`；各自本地数据库已独立应用迁移；A/B 使用同一组 DTO、日期、金额、错误码和锁顺序；公共文件落笔人已约定。Git 分支同步不代表 PostgreSQL 数据、历史订单或本地私密配置已经同步，任何一方都不能据此跳过自己的迁移核对。
 
 ## 9. 最终后端验收清单
 
@@ -242,6 +300,6 @@ A 负责受控 Demo/未来银行适配的真实性、快照覆盖游标、晚到
 6. 新消费者路由类型、权限、错误和时间/金额契约一致；普通消费者无法伪造银行事实或访问他人账户；沙盒/模拟能力被清楚标记而非声称真实银行集成。
 7. 新业务的定向测试通过；旧 Agent 全局队列计数测试的不稳定原因完成隔离，不能把某一次 55/55 说成持续稳定的全量门禁。
 
-## 10. 开工时的第一句话
+## 10. 开工批准与第一步
 
-数据库**结构**和共享**字段定义**已经在本机准备好，但新财务表没有样例事实，新消费者路由没有实现。确认远端基线并在两位开发者各自的 PostgreSQL 中应用迁移后，A 从 Demo 资金事实和逐日核算开始，B 从每日项目、只读 AI 草案和 Demo 报价开始；两人在最终准入与结果回传两个节点会合。这样可以并行，不会让任何一人独自决定资金、确认或支付的边界。
+数据库**结构**、共享**字段定义**和 B00—B02 接口边界已经进入当前代码基线，但新财务表没有样例事实，B02 新消费者 Agent 工具尚未接入实际运行。双方各自完成阶段 0 的本地迁移核对后，A 从 Demo 资金事实和逐日核算开始；B-Ⅰ 已完成接口独立验收，下一步先接 A02／A03 补真实项目写入与草稿评估检查，再接 A04／A05 的真实 preview 与 commit，并在最终准入、结果回传两个节点会合。这样可以并行，同时没有任何一方能够单独越过资金、确认或支付边界。

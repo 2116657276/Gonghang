@@ -1,4 +1,7 @@
 import Fastify from 'fastify';
+import { registerBudgetItemApi } from './routes/budget-items.js';
+import { registerOfferApi } from './routes/offers.js';
+import { registerPlanningDraftApi } from './routes/planning-drafts.js';
 import cookie from '@fastify/cookie';
 import cors from '@fastify/cors';
 import { ZodError } from 'zod';
@@ -8,8 +11,14 @@ import { AppError } from './domain/errors.js';
 import { registerApi } from './routes/api.js';
 import { registerAgentApi } from './routes/agent.js';
 import type { StreamFn } from '@earendil-works/pi-agent-core';
+import type { BudgetItemPort } from './domain/budget-port.js';
+import type { PlanningDraftPort } from './domain/planning-draft-port.js';
 
-export async function buildApp(options: { agentStream?: StreamFn } = {}) {
+export async function buildApp(options: {
+  agentStream?: StreamFn;
+  budgetItemPort?: BudgetItemPort;
+  planningDraftPort?: PlanningDraftPort;
+} = {}) {
 const app = Fastify({ logger: { level: 'info' } });
 
 await app.register(cookie);
@@ -42,6 +51,9 @@ app.setErrorHandler((error, _request, reply) => {
   return reply.code(500).send({ error: 'INTERNAL_ERROR', message: '服务暂时无法完成该操作。' });
 });
 await registerApi(app);
+await app.register(registerOfferApi);
+await app.register(registerBudgetItemApi, { budgetItemPort: options.budgetItemPort });
+await app.register(registerPlanningDraftApi, { planningDraftPort: options.planningDraftPort });
 registerAgentApi(app,options.agentStream);
 
 return app;
