@@ -7,14 +7,15 @@ import type { PlanningOptionChange } from './budget-cashflow.js';
 
 export type PurchaseItemRow = {
   id: string; accountId: string; periodId: string; kind: string; status: string;
-  plannedOn: string; categoryCode: string | null; estimateMinor: string;
+  title: string; plannedOn: string; categoryCode: string | null; estimateMinor: string;
 };
 export type PurchaseQuoteRow = {
   id: string; catalogItemId: string; quoteVersion: string; priceMinor: string;
   currency: string; serviceOn: string | null; ruleVersion: string;
-  quoteSource: string; providerQuoteRef: string | null; validUntil: Date;
+  provider: string; quoteSource: string; providerQuoteRef: string | null; validUntil: Date;
+  ruleSnapshot: Record<string, unknown>;
   status: string; catalogActive: boolean; purchaseMode: string;
-  catalogCurrency: string; catalogRuleVersion: number;
+  catalogName: string; catalogCurrency: string; catalogRuleVersion: number; ruleLabel: string;
   availableFrom: string | null; availableTo: string | null; catalogCategoryCode: string | null;
 };
 
@@ -29,7 +30,7 @@ export function safePurchaseMinor(value: number | string) {
 export async function readPurchaseItem(client: PoolClient, ownerId: string, periodId: string, budgetItemId: string,
   lock = false, allowedIntentId?: string) {
   const item = (await client.query<PurchaseItemRow>(`SELECT id,account_id AS "accountId",period_id AS "periodId",
-    kind,status,to_char(planned_on,'YYYY-MM-DD') AS "plannedOn",
+    kind,title,status,to_char(planned_on,'YYYY-MM-DD') AS "plannedOn",
     category_code AS "categoryCode",user_estimated_amount_minor AS "estimateMinor"
     FROM budget_items WHERE id=$1 AND owner_id=$2 AND period_id=$3 ${lock ? 'FOR UPDATE' : ''}`,
   [budgetItemId, ownerId, periodId])).rows[0];
@@ -52,10 +53,11 @@ export async function readPurchaseQuote(client: PoolClient, quoteId: string, ite
   const quote = (await client.query<PurchaseQuoteRow>(`SELECT q.id,q.catalog_item_id AS "catalogItemId",
     q.quote_version AS "quoteVersion",q.price_minor AS "priceMinor",q.currency,
     to_char(q.service_on,'YYYY-MM-DD') AS "serviceOn",q.rule_version AS "ruleVersion",
-    q.quote_source AS "quoteSource",q.provider_quote_ref AS "providerQuoteRef",
+    q.provider,q.quote_source AS "quoteSource",q.provider_quote_ref AS "providerQuoteRef",
+    q.rule_snapshot AS "ruleSnapshot",
     q.valid_until AS "validUntil",q.status,c.active AS "catalogActive",
-    c.purchase_mode AS "purchaseMode",c.currency AS "catalogCurrency",
-    c.rule_version AS "catalogRuleVersion",
+    c.name AS "catalogName",c.purchase_mode AS "purchaseMode",c.currency AS "catalogCurrency",
+    c.rule_version AS "catalogRuleVersion",c.rule_label AS "ruleLabel",
     to_char(c.available_from,'YYYY-MM-DD') AS "availableFrom",
     to_char(c.available_to,'YYYY-MM-DD') AS "availableTo",
     c.category_code AS "catalogCategoryCode"

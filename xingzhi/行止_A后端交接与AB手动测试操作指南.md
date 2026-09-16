@@ -1,14 +1,14 @@
 # 行止 A 后端交接与 A/B 手动测试操作指南
 
-更新：2026-09-15 · 工作分支：`huixiang` · 适用：消费者新月度预算产品
+更新：2026-09-16 · 工作分支：`jianlin` · 远程发布目标：`main` · 适用：消费者新月度预算产品
 
 > 本文按**当前代码**写，不把规划文档中的未来接口冒充已上线接口。文中金额单位是“分”：`8000` = ¥80，`50000` = ¥500。手动写入只在隔离的本地测试数据库进行；不要用已有历史订单／沙盒凭据所在的数据库做破坏性试验。
 
 ## 1. 先回答：A 是不是写完了？
 
-按当前 A00—A06 分工，**A 侧代码已具备交接条件**。A00 Demo 账户和样本、A01 本人账户事实/撤回、A02 自然月预算/项目/目标、A03 逐日现金流、A04 报价和意外预览、A05 同事务最终准入、A06 受控资金事件与月度复盘，都已有实现。A02 的项目写函数现已由 `buildApp` 默认接到 B01 项目路由。本机顺序迁移至 026；A 相关 10 项定向测试及服务端类型检查通过。
+按当前 A00—A06 和 B00—B07 分工，**已有核心领域实现；进入 M2 前须完成后端补充收口与 HTTP 集中验收**。A00 Demo 资金样例提供独立初始化入口；A01 本人账户事实/撤回、A02 自然月预算/项目/目标、A03 逐日现金流、A04 报价和意外预览、A05 同事务最终准入、A06 受控资金事件与月度复盘，以及 B03—B07 购买、Worker、调整、退款恢复和证据读取均已有实现。A02 的项目写函数和 A03 的草稿评估已由 `buildApp` 默认接入 B 路由；当前迁移为 001—028，原范围目标套件已有 69/69 记录，模型费用账本隔离修复已应用但本工作区尚待重新复跑确认；服务端与共享契约类型检查通过。
 
-这不是“整个新版后端已完成”。以下仍缺：B03 购买意图、B04 本人确认/新订单/支付交接、B05 受信 Worker 结果回传、B06 意外调整/取消退款、B07 连续 API 验收；新消费者 Agent 工具白名单尚未接入实际模型运行；真实银行账户持续同步、沙盒到银行流水的真实映射、完整 N 案例和前端连续操作均未验证。当前 A 代码及 024—026 迁移还在本地**未提交工作树**，未推送到 Git；本机 PostgreSQL 数据也不会随 Git 自动共享。B 拿到代码并在自己的库执行迁移前，不能按“已交付到远端”安排联调。
+这不是“整个新版产品已完成”。M1 已有证据覆盖受控 simulation 领域主链，后端补充收口按 A/B 总方案第 11 节执行；真实银行账户持续同步、新消费者流程的支付宝沙箱连续链、完整 N 案例、统一前端和用户连续操作仍未验证。当前本机 A00 资金样例尚未加载，数据库只读状态以[新版验证策略](docs/04-quality/verification.md)为准；代码、迁移和文档发布到远程 `main` 后，协作者仍须在自己的 PostgreSQL 中执行 001—028 迁移，并按需单独加载 A00/B00 样例。
 
 | A 编号 | 当前交付 | B 的接入点 | 能否单独手测 |
 | --- | --- | --- | --- |
@@ -16,9 +16,9 @@
 | A01 | 本人账户读取、现金依据、信用/负债与 pending 分离、撤回 | B03/B04/B05 在新执行前复核授权 | 账户列表/撤回可；真实银行同步不可 |
 | A02 | 周期创建/读取/激活、目标审计、项目新增/修改/取消 | B01 外层事务把同一个 `PoolClient` 交给 A | 可；完整“新建 draft→激活”需另一测试借记账户，本 Demo 本月周期已 active |
 | A03 | 月度和滚动 30 日逐日风险、草稿只读评估 | B02 预算草稿；B05/B06 变化后重算 | 可读评估；跨月未知须联合验证 |
-| A04 | `POST /api/finance/assessments`，内部意外/调整选项预览 | B03 使用已保存评估，不自行改价 | 报价购买预览可；意外 HTTP 入口尚由 B 实现 |
-| A05 | `commitPurchaseAssessment` 内部最终准入 | B04 的唯一外层事务及确认建单回调 | 仅回滚事务定向测试；无消费者建单 HTTP |
-| A06 | `applyVerifiedMoneyEvent` 内部资金事件及本人周期复盘 GET | B05/B06 的受信渠道/Worker 适配器 | 复盘 GET 可；事件仅内部测试，不开放消费者写路由 |
+| A04 | `POST /api/finance/assessments`，内部意外/调整选项预览 | B03 使用已保存评估，不自行改价 | 报价购买预览和 B06 意外评估已接入；真实银行事实仍未接入 |
+| A05 | `commitPurchaseAssessment` 内部最终准入 | B04 的唯一外层事务及确认建单回调 | B04 消费者确认/建单已接入 simulation；外部付款仍需 M3 沙箱连续验证 |
+| A06 | `applyVerifiedMoneyEvent` 内部资金事件及本人周期复盘 GET | B05/B06 的受信渠道/Worker 适配器 | B05/B06 已接入 simulation；事件仍不开放消费者直接写路由 |
 
 ## 2. 交给 B 的固定调用顺序
 
@@ -39,11 +39,11 @@
 
 ## 3. 手测前的环境和安全要求
 
-1. 确认 B 已从同一版本拿到 A 的所有**代码及 024、025、026 迁移文件**。当前本机改动未提交/推送，因此这一步尚未完成；不要只把本机数据库状态当交接。每人分别确认自己的 PostgreSQL 迁移登记已到 026。
+1. 确认 B 已从远程 `main` 拿到同一版本的所有 A/B **代码及 001—028 迁移文件**。不要只把本机数据库状态当交接；每人分别确认自己的 PostgreSQL 迁移登记已到 028，再按需运行 A00/B00 独立样例入口。
 2. 使用**独立本地测试库**。新库先完成迁移和通用测试用户初始化；已有历史/沙盒业务库不要重新运行旧 `db:seed`，因为它会更新旧 A/B/C/D 目录。不要清空或强制覆盖现有数据库。
 3. `.env` 仅在本机配置 `DATABASE_URL`、`PORT`、`WEB_ORIGIN`、`SEED_DEMO_PASSWORD`；不要提交、截图公开或把账户/支付密钥放进请求示例。当前本机 `PORT=8877`、`WEB_ORIGIN=http://localhost:5173`、`PAYMENT_MODE=simulation`；队友若不同，以各自 `.env` 为准。
 4. PostgreSQL/Docker Desktop 应实际就绪；API 可访问。可从仓库根目录启动 `pnpm --filter @xingzhi/server dev`；要同时看旧 Web/Worker 可用 `pnpm dev`。新消费者前端尚未接齐这些 API，下面的步骤使用 PowerShell 或同等 HTTP 客户端，不以旧网页按钮作为验收依据。
-5. Demo 样本的快照只在首次初始化时写入；超过 24 小时会因过期而变成 `unknown`。**重新运行种子不会刷新快照，也不应通过改库伪造余额来通过测试。** 若 `cashBasis.dataStatus` 不是 `observed`，标记“资金依据待刷新”，只做只读/错误边界；真实刷新适配需按双方受控事实流程完成。
+5. Demo 样本的快照只在首次初始化时写入；超过 24 小时会因过期而变成 `unknown`。**重新运行种子不会刷新快照，也不应通过改库伪造余额来通过测试。** 若 `cashBasis.dataStatus` 不是 `observed`，标记“资金依据待刷新”，只做只读/错误边界；M1 收口将提供显式创建新隔离场景的办法，详见 A/B 总方案第 11 节；当前尚未实现，不能把重复运行种子当成刷新。
 
 新隔离库的初始化顺序（在仓库根目录执行，先自行核对 `.env` 指向的库）：
 
@@ -151,7 +151,7 @@ $xzAssessment = Invoke-RestMethod -Method Post -Uri "$xzBase/api/finance/assessm
 $xzAssessment.data | Select-Object assessmentId,replacedEstimateMinor,quotedAmountMinor,incrementalImpactMinor,status,reasonCodes,expiresAt
 ```
 
-预期金额三项分别为 `8000`、`9900`、`1900`。`status` 由当天资金事实决定；只有新鲜 `allowed` 加上后续 A05 最终复核，才可能进入 B04 建单。现在 `POST /api/purchase-intents` 尚未实现，**手测到评估即停止**，不要调用旧计划购买入口来“补完”新流程。评估同一键同参数重试返回原 `assessmentId`；换参数复用该键为 `IDEMPOTENCY_CONFLICT`。评估最多五分钟有效；资金、周期或报价版本变化后必须重新评估。
+预期金额三项分别为 `8000`、`9900`、`1900`。`status` 由当天资金事实决定；只有新鲜 `allowed` 加上后续 A05 最终复核，才可能进入 B04 建单。现在可继续调用 `POST /api/purchase-intents` 创建 `proposed` 意图，再由本人确认接口完成 B04；不要调用旧计划购买入口来“补完”新流程。评估同一键同参数重试返回原 `assessmentId`；换参数复用该键为 `IDEMPOTENCY_CONFLICT`。评估最多五分钟有效；资金、周期或报价版本变化后必须重新评估。
 
 ### 4.4 自定义项目、幂等、版本、跨月与取消
 
@@ -228,7 +228,7 @@ $xzReview.data | Select-Object originalSavingsTargetMinor,currentSavingsTargetMi
 
 ## 5. B 接线后追加的联合手动验收
 
-以下**目前不能完整执行**。B 完成相应路由/Worker 后，A+B 在隔离环境共同验收，并将每例记录为：请求时间、本人角色、周期/账户/项目/报价/评估/意图/订单 ID、三个前后版本、HTTP 状态/错误码、订单/支付/退款证据、是否影响确认现金。不要记录密码、密钥、全卡号或原始支付凭据。
+以下联合 HTTP 案例**尚未取得完整执行记录**；部分领域行为已有 69/69 原范围证据。先完成 A/B 总方案第 11 节收口，再按验证策略第十四节集中执行。A+B 在隔离环境共同验收，并将每例记录为：请求时间、本人角色、周期/账户/项目/报价/评估/意图/订单 ID、三个前后版本、HTTP 状态/错误码、订单/支付/退款证据、是否影响确认现金。不要记录密码、密钥、全卡号或原始支付凭据。
 
 | 用例 | 由谁发起/实现 | 必须观察的结果 |
 | --- | --- | --- |
@@ -251,7 +251,7 @@ $xzReview.data | Select-Object originalSavingsTargetMinor,currentSavingsTargetMi
 
 | 观察 | 首先检查 |
 | --- | --- |
-| API 打不开 | Docker/PostgreSQL 实际运行、`.env` 所指测试库、迁移 026、API 实际 `PORT`，不要只看 Docker Desktop 窗口已打开 |
+| API 打不开 | Docker/PostgreSQL 实际运行、`.env` 所指测试库、迁移 028、API 实际 `PORT`，不要只看 Docker Desktop 窗口已打开 |
 | 401／403 | 会话 Cookie、消费者角色、写请求 `Origin` 是否等于 `WEB_ORIGIN` |
 | `VALIDATION_ERROR` | 日期是否属于当前自然月、路径/正文 ID 是否一致、金额是正整数分、写请求是否带有效幂等键 |
 | `VERSION_CONFLICT` | 重新 GET 账户/周期及报价，取最新版本；旧评估不能自动重用 |
@@ -260,6 +260,6 @@ $xzReview.data | Select-Object originalSavingsTargetMinor,currentSavingsTargetMi
 | `FINANCE_SCOPE_REVOKED` | 已撤回账户不能重授新执行；只允许历史读取和既有订单善后 |
 | 支付/退款金额与页面不一致 | 分清用户估价、服务端报价、订单确认价、渠道回执、本人借记账户 posted 流水；只最后一种能改变确认现金 |
 
-交付给 B 前再核对：同一 `huixiang` 代码版本、024→025→026 顺序迁移、B 可调用 A 内部函数的 import/类型、测试账号仅来自本地 `.env`、未把 `.env`/`.local-secrets` 送入 Git、A 相关测试在双方库可重复回滚、旧订单不被新 SQL 或初始化覆盖。是否提交/推送、用哪个远端和时间点，由仓库负责人安排；本文只提供交接和手测规则，不代替版本发布。
+交付给 B 前再核对：实际发布到远程 `main` 的代码版本、001→028 顺序迁移、B 可调用 A 内部函数的 import/类型、测试账号仅来自本地 `.env`、未把 `.env`/`.local-secrets` 送入 Git、A/B 相关测试在双方库可重复回滚、旧订单不被新 SQL 或初始化覆盖。A00 资金样例和 B00 报价是独立种子，不会随 PostgreSQL 数据或 Git 自动同步；本文只提供交接和手测规则，不替代版本发布，也不把本地工作区当成远程已发布状态。
 
 代码入口：[A02 自然月预算](apps/server/src/domain/budget-periods.ts)、[A03 逐日核算](apps/server/src/domain/budget-cashflow.ts)、[A04 购买评估](apps/server/src/domain/purchase-assessment.ts)、[A05 最终准入](apps/server/src/domain/purchase-commit.ts)、[A06 资金事件](apps/server/src/domain/verified-money-event.ts)、[共同契约](packages/contracts/src/consumer-backend.ts)、[现状验证](docs/04-quality/verification.md)。

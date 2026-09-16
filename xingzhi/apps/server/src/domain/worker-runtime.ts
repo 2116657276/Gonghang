@@ -4,13 +4,16 @@ import type { PoolClient } from 'pg';
 import { transaction } from '../db/client.js';
 import { appendEvent } from './events.js';
 import { ensureManualTask } from './aftercare.js';
+import { randomUUID } from 'node:crypto';
+import { applyVerifiedMoneyEvent } from './verified-money-event.js';
 
 export type ClaimedJob = {
   job_id: string;
   operation_id: string;
   type: 'simulate_payment' | 'simulate_close' | 'simulate_refund' | 'simulate_refund_batch' | 'sandbox_close' | 'sandbox_refund' | 'sandbox_payment_recheck' | 'sandbox_refund_recheck';
   entity_id: string;
-  plan_id: string;
+  plan_id: string | null;
+  budget_period_id: string | null;
   owner_id: string;
   job_lease_version: number;
   operation_lease_version: number;
@@ -19,7 +22,8 @@ export type ClaimedJob = {
 export async function claimNextJob(): Promise<ClaimedJob | undefined> {
   return transaction(async (client) => {
     const candidate = await client.query<ClaimedJob>(`
-      SELECT jobs.id AS job_id, operations.id AS operation_id, operations.type, operations.entity_id, operations.plan_id, operations.owner_id
+      SELECT jobs.id AS job_id, operations.id AS operation_id, operations.type,
+        operations.entity_id, operations.plan_id, operations.budget_period_id, operations.owner_id
       FROM jobs JOIN operations ON operations.id = jobs.operation_id
       WHERE ((jobs.state = 'pending' AND jobs.next_run_at <= now())
          OR (jobs.state = 'leased' AND jobs.lease_until < now()))
@@ -68,7 +72,13 @@ async function completeJob(
       [job.job_id, job.job_lease_version],
     );
     if (!completedJob.rowCount) throw new Error('任务租约已被其他执行者接管。');
-    await appendEvent(client, job.plan_id, null, eventType, { operationId: job.operation_id, ...result });
+    if (job.plan_id) {
+      await appendEvent(client, job.plan_id, null, eventType, { operationId: job.operation_id, ...result });
+    } else if (job.budget_period_id) {
+      await client.query(`INSERT INTO budget_events (owner_id,period_id,actor_id,type,data)
+        VALUES($1,$2,NULL,$3,$4)`, [job.owner_id, job.budget_period_id, eventType,
+        { operationId: job.operation_id, ...result }]);
+    }
   })();
 }
 
@@ -84,6 +94,34 @@ async function processPayment(client: PoolClient, job: ClaimedJob) {
     if (order.simulation_mode === 'SUCCESS') {
       await client.query("UPDATE orders SET payment_status = 'paid', status = 'fulfilling', updated_at = now() WHERE id = $1", [order.id]);
       await client.query("UPDATE payment_attempts SET status = 'paid', sent_at = COALESCE(sent_at, now()), observed_at = now() WHERE order_id = $1", [order.id]);
+      if (job.budget_period_id) {
+        const scope = (await client.query<{ accountId: string; amountMinor: number; itemName: string }>(`SELECT
+            p.primary_account_id AS "accountId",o.amount_minor AS "amountMinor",o.item_name AS "itemName"
+          FROM orders o JOIN budget_periods p ON p.id=o.budget_period_id
+          WHERE o.id=$1 AND o.owner_id=$2 AND o.budget_period_id=$3`,
+        [order.id, job.owner_id, job.budget_period_id])).rows[0];
+        if (!scope) throw new Error('新消费者模拟订单缺少原预算和账户范围。');
+        const ledgerId = randomUUID();
+        const occurredAt = new Date();
+        await client.query(`INSERT INTO finance_ledger_entries
+            (id,owner_id,account_id,source,source_ref,direction,amount_minor,
+              occurred_at,posted_at,status,category,merchant_name,note,order_id,dedupe_key)
+          VALUES($1,$2,$3,'demo',$4,'outflow',$5,$6,$6,'posted','purchase',$7,
+            '受控模拟支付到账',$8,$9)`, [ledgerId, job.owner_id, scope.accountId,
+          `SIM_PAYMENT_${job.operation_id}`, scope.amountMinor, occurredAt, scope.itemName,
+          order.id, `simulation-payment:${job.operation_id}`]);
+        await applyVerifiedMoneyEvent(client, job.owner_id, {
+          orderId: order.id,
+          provider: 'simulation',
+          providerEventId: `SIM_POSTED_${job.operation_id}`,
+          eventType: 'payment_posted',
+          amountMinor: scope.amountMinor,
+          currency: 'CNY',
+          occurredAt: occurredAt.toISOString(),
+          verificationState: 'verified',
+          source: 'demo',
+        }, { appliedLedgerEntryId: ledgerId }, occurredAt);
+      }
       return {
         state: 'succeeded' as const,
         result: { source: 'simulation', paymentStatus: 'paid', observedAt: new Date().toISOString() },
@@ -131,6 +169,7 @@ async function processClose(client: PoolClient, job: ClaimedJob) {
 }
 
 async function processRefund(client: PoolClient, job: ClaimedJob) {
+  if (!job.plan_id) throw new Error('历史退款任务缺少旧计划范围。');
   const result = await client.query<{ order_id: string; merchant_id: string }>(`
     SELECT cancellation_requests.order_id, orders.merchant_id FROM cancellation_requests
     JOIN orders ON orders.id=cancellation_requests.order_id WHERE cancellation_requests.id=$1`, [job.entity_id]);
@@ -150,12 +189,13 @@ async function processRefundBatch(client: PoolClient, job: ClaimedJob) {
     const result = await client.query<{
       id: string; cancellation_request_id: string; order_id: string; merchant_id: string; amount_minor: number; status: string;
       environment: string; order_amount_minor: number; refund_simulation_mode: 'SUCCESS' | 'PENDING' | 'UNKNOWN'; payment_status: string; refunded_minor: number;
-      cancellation_status: string; accepted_refund_minor: number;
+      cancellation_status: string; accepted_refund_minor: number; budget_adjustment_id: string | null;
     }>(`
       SELECT refund_batches.id, refund_batches.cancellation_request_id, refund_batches.order_id, refund_batches.merchant_id,
         refund_batches.amount_minor, refund_batches.status, refund_batches.environment,
         orders.amount_minor AS order_amount_minor, orders.refund_simulation_mode, orders.payment_status, orders.refunded_minor,
-        cancellation_requests.status AS cancellation_status, cancellation_requests.accepted_refund_minor
+        cancellation_requests.status AS cancellation_status, cancellation_requests.accepted_refund_minor,
+        cancellation_requests.budget_adjustment_id
       FROM refund_batches
       JOIN cancellation_requests ON cancellation_requests.id = refund_batches.cancellation_request_id
       JOIN orders ON orders.id = refund_batches.order_id
@@ -170,7 +210,9 @@ async function processRefundBatch(client: PoolClient, job: ClaimedJob) {
       await client.query("UPDATE refund_batches SET status = 'failed', updated_at = now() WHERE id = $1", [batch.id]);
       await client.query("UPDATE cancellation_requests SET status = 'pending_review', updated_at = now() WHERE id = $1", [batch.cancellation_request_id]);
       const task = await ensureManualTask(client, {
-        dedupeKey: `refund-recheck:${batch.id}`, planId: job.plan_id, merchantId: batch.merchant_id,
+        dedupeKey: `refund-recheck:${batch.id}`,
+        ...(job.plan_id ? { planId: job.plan_id, merchantId: batch.merchant_id }
+          : { budgetPeriodId: job.budget_period_id!, responsibleProvider: 'simulation' }),
         orderId: batch.order_id, cancellationRequestId: batch.cancellation_request_id, refundBatchId: batch.id,
         operationId: job.operation_id, type: 'refund_recheck', reason: '退款批次与原订单当前状态不一致。',
         nextAction: '核对原订单付款状态和已确认的取消申请，不得新增退款号替代原批次。',
@@ -192,7 +234,9 @@ async function processRefundBatch(client: PoolClient, job: ClaimedJob) {
       await client.query('UPDATE refund_batches SET status = $2, updated_at = now() WHERE id = $1', [batch.id, batchState]);
       await client.query("UPDATE cancellation_requests SET status = 'pending_review', updated_at = now() WHERE id = $1", [batch.cancellation_request_id]);
       const task = await ensureManualTask(client, {
-        dedupeKey: `refund-recheck:${batch.id}`, planId: job.plan_id, merchantId: batch.merchant_id,
+        dedupeKey: `refund-recheck:${batch.id}`,
+        ...(job.plan_id ? { planId: job.plan_id, merchantId: batch.merchant_id }
+          : { budgetPeriodId: job.budget_period_id!, responsibleProvider: 'simulation' }),
         orderId: batch.order_id, cancellationRequestId: batch.cancellation_request_id, refundBatchId: batch.id,
         operationId: job.operation_id, type: 'refund_recheck', reason: '本地模拟退款结果未形成明确成功事实。',
         nextAction: '按原退款业务编号复核结果；未知时保留退款占用，不得新建替代批次。',
@@ -222,6 +266,54 @@ async function processRefundBatch(client: PoolClient, job: ClaimedJob) {
       SET refunded_minor = refunded_minor + $2, status = $3, updated_at = now() WHERE id = $1`, [
       batch.order_id, batch.amount_minor, completed ? 'cancelled' : 'cancellation_processing',
     ]);
+    if (job.budget_period_id) {
+      const scope = (await client.query<{ accountId: string }>(`SELECT
+          p.primary_account_id AS "accountId"
+        FROM budget_periods p JOIN finance_accounts a ON a.id=p.primary_account_id
+        WHERE p.id=$1 AND p.owner_id=$2 AND a.source='demo'`,
+      [job.budget_period_id, job.owner_id])).rows[0];
+      if (!scope) throw new Error('新消费者模拟退款缺少 Demo 账户范围。');
+      const occurredAt = new Date();
+      await applyVerifiedMoneyEvent(client, job.owner_id, {
+        orderId: batch.order_id,
+        provider: 'simulation',
+        providerEventId: `SIM_REFUND_VERIFIED_${job.operation_id}`,
+        eventType: 'refund_verified',
+        amountMinor: batch.amount_minor,
+        currency: 'CNY',
+        occurredAt: occurredAt.toISOString(),
+        verificationState: 'verified',
+        source: 'demo',
+      }, {}, occurredAt);
+      const ledgerId = randomUUID();
+      await client.query(`INSERT INTO finance_ledger_entries
+          (id,owner_id,account_id,source,source_ref,direction,amount_minor,
+            occurred_at,posted_at,status,category,note,order_id,dedupe_key)
+        VALUES($1,$2,$3,'demo',$4,'inflow',$5,$6,$6,'posted','refund',
+          '受控模拟退款到账',$7,$8)`, [ledgerId, job.owner_id, scope.accountId,
+        `SIM_REFUND_${job.operation_id}`, batch.amount_minor, occurredAt, batch.order_id,
+        `simulation-refund:${job.operation_id}`]);
+      await applyVerifiedMoneyEvent(client, job.owner_id, {
+        orderId: batch.order_id,
+        provider: 'simulation',
+        providerEventId: `SIM_REFUND_POSTED_${job.operation_id}`,
+        eventType: 'refund_posted',
+        amountMinor: batch.amount_minor,
+        currency: 'CNY',
+        occurredAt: occurredAt.toISOString(),
+        verificationState: 'verified',
+        source: 'demo',
+      }, { appliedLedgerEntryId: ledgerId }, occurredAt);
+      if (completed && batch.budget_adjustment_id) {
+        const unresolved = await client.query(`SELECT 1 FROM cancellation_requests
+          WHERE budget_adjustment_id=$1 AND status NOT IN ('completed','rejected') LIMIT 1`,
+        [batch.budget_adjustment_id]);
+        if (!unresolved.rowCount) {
+          await client.query(`UPDATE budget_adjustment_proposals SET status='complete'
+            WHERE id=$1 AND status IN ('executing','pending_review')`, [batch.budget_adjustment_id]);
+        }
+      }
+    }
     return {
       state: 'succeeded' as const,
       result: { source: 'simulation', refundedMinor: batch.amount_minor, totalRefundedMinor: refundedMinor, completed },
@@ -235,7 +327,16 @@ export async function processClaimedJob(job: ClaimedJob): Promise<boolean> {
   if (job.type.startsWith('sandbox_')) return processChannelJob(job);
   return transaction(async (client) => {
     // Hold the claim through every business write and the final event commit.
-    await client.query('SELECT id FROM plans WHERE id = $1 FOR UPDATE', [job.plan_id]);
+    if (job.plan_id) {
+      await client.query('SELECT id FROM plans WHERE id = $1 FOR UPDATE', [job.plan_id]);
+    } else if (job.budget_period_id) {
+      await client.query(`SELECT a.id FROM budget_periods p
+        JOIN finance_accounts a ON a.id=p.primary_account_id
+        WHERE p.id=$1 AND p.owner_id=$2 FOR UPDATE OF a,p`,
+      [job.budget_period_id, job.owner_id]);
+    } else {
+      throw new Error('后台任务缺少业务范围。');
+    }
     const lease = await client.query(`SELECT jobs.id FROM jobs JOIN operations ON operations.id = jobs.operation_id
       WHERE jobs.id = $1 AND operations.id = $2 AND jobs.state = 'leased'
         AND jobs.lease_version = $3 AND operations.lease_version = $4
@@ -243,20 +344,23 @@ export async function processClaimedJob(job: ClaimedJob): Promise<boolean> {
       FOR UPDATE OF jobs, operations`,
     [job.job_id, job.operation_id, job.job_lease_version, job.operation_lease_version]);
     if (!lease.rowCount) return false;
-    const related = await client.query<{ environment: string; provider: string; plan_id: string }>(`
-      SELECT orders.environment, orders.provider, orders.plan_id FROM orders WHERE orders.id = $1
+    const related = await client.query<{ environment: string; provider: string;
+      plan_id: string | null; budget_period_id: string | null }>(`
+      SELECT orders.environment, orders.provider, orders.plan_id,orders.budget_period_id FROM orders WHERE orders.id = $1
         AND $2 IN ('simulate_payment', 'simulate_close')
       UNION ALL
-      SELECT orders.environment, orders.provider, orders.plan_id FROM cancellation_requests
+      SELECT orders.environment, orders.provider, orders.plan_id,orders.budget_period_id FROM cancellation_requests
         JOIN orders ON orders.id = cancellation_requests.order_id
         WHERE cancellation_requests.id = $1 AND $2 = 'simulate_refund'
       UNION ALL
       SELECT CASE WHEN refund_batches.environment = orders.environment THEN orders.environment ELSE 'invalid' END,
-        CASE WHEN refund_batches.provider = orders.provider THEN orders.provider ELSE 'invalid' END, orders.plan_id
+        CASE WHEN refund_batches.provider = orders.provider THEN orders.provider ELSE 'invalid' END,
+        orders.plan_id,orders.budget_period_id
         FROM refund_batches JOIN orders ON orders.id = refund_batches.order_id
         WHERE refund_batches.id = $1 AND $2 = 'simulate_refund_batch'`, [job.entity_id, job.type]);
     const order = related.rows[0];
-    if (!order || order.environment !== 'simulation' || order.provider !== 'simulation' || order.plan_id !== job.plan_id) {
+    if (!order || order.environment !== 'simulation' || order.provider !== 'simulation'
+      || order.plan_id !== job.plan_id || order.budget_period_id !== job.budget_period_id) {
       await completeJob(client, job, 'failed', { reason: '模拟任务与订单环境或归属不一致，未修改交易事实。' }, 'operation.environment_rejected');
       return true;
     }

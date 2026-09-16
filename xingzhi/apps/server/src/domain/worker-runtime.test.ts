@@ -65,6 +65,13 @@ async function fixture(
   return {...ids,operation};
 }
 
+async function resetModelLedger() {
+  // Each model test uses the file-local isolated schema. Always restore the
+  // shared ledger so later tests do not inherit a prior run's cost.
+  await pool.query('DELETE FROM model_usage');
+  await pool.query('UPDATE model_budget SET spent_micros=0,reserved_micros=0 WHERE id=1');
+}
+
 for (const type of ['simulate_payment', 'simulate_close', 'simulate_refund_batch'] as const) {
   test(`${type}: 错误环境不能修改订单、退款及占用`, async () => {
     const f = await fixture(type, 'sandbox');
@@ -151,6 +158,149 @@ test('付款、关单与退款模拟结果互相独立', async () => {
   assert.equal((await pool.query('SELECT state FROM operations WHERE id=$1',[refund.operation])).rows[0].state,'pending_review');
   assert.equal((await pool.query('SELECT status FROM refund_batches WHERE id=$1',[refund.batch])).rows[0].status,'pending_review');
   assert.equal((await pool.query('SELECT count(*)::int AS n FROM manual_tasks WHERE refund_batch_id=$1',[refund.batch])).rows[0].n,1);
+});
+
+test('B03—B06 新消费者订单按预算周期完成模拟付款、意外调整与退款到账', async () => {
+  config.paymentMode='simulation';
+  const ids={user:randomUUID(),merchant:randomUUID(),account:randomUUID(),snapshot:randomUUID(),
+    period:randomUUID(),dinner:randomUUID(),flexible:randomUUID(),essential:randomUUID(),
+    catalog:randomUUID(),quote:randomUUID()};
+  const now=new Date();
+  const today=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit'}).format(now);
+  const monthStart=`${today.slice(0,7)}-01`;
+  const monthEndDate=new Date(`${monthStart}T00:00:00Z`);monthEndDate.setUTCMonth(monthEndDate.getUTCMonth()+1);monthEndDate.setUTCDate(0);
+  const monthEnd=monthEndDate.toISOString().slice(0,10);
+  await transaction(async client=>{
+    await client.query(`INSERT INTO users(id,email,display_name,role,password_hash)
+      VALUES($1,$2,'B 阶段消费者','consumer','disabled'),($3,$4,'B 阶段商户','merchant_admin','disabled')`,
+    [ids.user,`${ids.user}@test.local`,ids.merchant,`${ids.merchant}@test.local`]);
+    await client.query(`INSERT INTO finance_accounts
+      (id,owner_id,provider,account_type,provider_account_ref,masked_identifier,display_name,source,authorized_at)
+      VALUES($1,$2,'demo','debit',$4,'****B07','B07 Demo 账户','demo',$3)`,
+    [ids.account,ids.user,now,ids.account]);
+    await client.query(`INSERT INTO finance_account_snapshots
+      (id,account_id,available_balance_minor,current_balance_minor,as_of,covered_through_at,fact_status,source)
+      VALUES($1,$2,200000,200000,$3,$3,'observed','demo')`,[ids.snapshot,ids.account,now]);
+    await client.query(`INSERT INTO budget_periods
+      (id,owner_id,primary_account_id,baseline_snapshot_id,month_start,month_end,
+        savings_target_minor,status,necessities_confirmed_at)
+      VALUES($1,$2,$3,$4,$5,$6,50000,'active',now())`,
+    [ids.period,ids.user,ids.account,ids.snapshot,monthStart,monthEnd]);
+    await client.query(`INSERT INTO budget_items
+      (id,owner_id,period_id,account_id,kind,title,category_code,planned_on,
+        user_estimated_amount_minor,priority) VALUES
+      ($1,$4,$5,$6,'essential_expense','必要支出',NULL,$7,90000,'required'),
+      ($2,$4,$5,$6,'planned_spend','朋友聚餐','food',$8,8000,'adjustable'),
+      ($3,$4,$5,$6,'planned_spend','其他可调开支',NULL,$7,32000,'adjustable')`,
+    [ids.essential,ids.dinner,ids.flexible,ids.user,ids.period,ids.account,monthEnd,today]);
+    await client.query(`INSERT INTO catalog_items
+      (id,merchant_id,code,name,kind,description,price_minor,rule_label,cancellation_rule,
+        simulation_mode,close_simulation_mode,refund_simulation_mode,category_code,purchase_mode)
+      VALUES($1,$2,$3,'Demo 双人晚餐','food','B07 连续验收',9900,'全额退款','full_refund',
+        'SUCCESS','SUCCESS','SUCCESS','food','orderable')`,[ids.catalog,ids.merchant,`B07-${ids.catalog}`]);
+    await client.query(`INSERT INTO offer_quotes
+      (id,catalog_item_id,provider,quote_source,provider_quote_ref,quote_version,price_minor,
+        service_on,rule_version,rule_snapshot,valid_until)
+      VALUES($1,$2,'simulation','demo',$3,1,9900,$4,1,$5,now()+interval '1 hour')`,
+    [ids.quote,ids.catalog,`B07-${ids.quote}`,today,{cancellationRule:'full_refund'}]);
+  });
+  const {assessPurchasePreview}=await import('./purchase-assessment.js');
+  const {createPurchaseIntent}=await import('./purchase-intents.js');
+  const {confirmPurchaseIntent,prepareConsumerPaymentHandoff}=await import('./consumer-orders.js');
+  const {createBudgetAdjustment,confirmBudgetAdjustment}=await import('./budget-adjustments.js');
+  const versions=async()=>{
+    const row=(await pool.query<{financial:string;period:string}>(`SELECT a.financial_version AS financial,p.version AS period
+      FROM finance_accounts a JOIN budget_periods p ON p.primary_account_id=a.id WHERE p.id=$1`,[ids.period])).rows[0]!;
+    return {financial:Number(row.financial),period:Number(row.period)};
+  };
+  const initial=await versions();
+  const preview=await transaction(client=>assessPurchasePreview(client,ids.user,{
+    periodId:ids.period,budgetItemId:ids.dinner,quoteId:ids.quote,
+    expectedFinancialVersion:initial.financial,expectedPeriodVersion:initial.period,
+    expectedQuoteVersion:1,mode:'preview',
+  },now));
+  assert.equal(preview.status,'allowed');assert.equal(preview.incrementalImpactMinor,1900);
+  const intent=await transaction(client=>createPurchaseIntent(client,ids.user,'b07-intent',{
+    periodId:ids.period,budgetItemId:ids.dinner,quoteId:ids.quote,assessmentId:preview.assessmentId,
+    expectedFinancialVersion:initial.financial,expectedPeriodVersion:initial.period,expectedQuoteVersion:1,
+  },now));
+  const confirmed=await transaction(client=>confirmPurchaseIntent(client,ids.user,intent.purchaseIntentId,{
+    acceptedAmountMinor:9900,expectedFinancialVersion:initial.financial,
+    expectedPeriodVersion:initial.period,expectedQuoteVersion:1,confirmedByUser:true,
+  }));
+  const orderId=confirmed.order.orderId;
+  assert.equal(confirmed.order.paymentStatus,'pending');
+  const handoff=await transaction(client=>prepareConsumerPaymentHandoff(client,ids.user,orderId));
+  assert.equal(handoff.requiresUserAction,false);
+  const paymentJob=await claimNextJob();assert.ok(paymentJob);assert.equal(paymentJob.budget_period_id,ids.period);
+  await processClaimedJob(paymentJob);
+  assert.equal((await pool.query('SELECT payment_status FROM orders WHERE id=$1',[orderId])).rows[0].payment_status,'paid');
+  assert.equal((await pool.query(`SELECT count(*)::int AS n FROM finance_money_events
+    WHERE order_id=$1 AND event_type='payment_posted'`,[orderId])).rows[0].n,1);
+
+  const afterPayment=await versions();
+  const large=await transaction(client=>createBudgetAdjustment(client,ids.user,{
+    periodId:ids.period,amountMinor:40000,plannedOn:monthEnd,reason:'临时必要维修',
+    expectedFinancialVersion:afterPayment.financial,expectedPeriodVersion:afterPayment.period,
+  }));
+  assert.ok(large.options.some(option=>option.changes.some(change=>change.action==='cancel')
+    && option.assessment.status==='allowed'));
+  const small=await transaction(client=>createBudgetAdjustment(client,ids.user,{
+    periodId:ids.period,amountMinor:100,plannedOn:today,reason:'临时交通补付',
+    expectedFinancialVersion:afterPayment.financial,expectedPeriodVersion:afterPayment.period,
+  }));
+  const cancelOrder=small.options.find(option=>option.changes.some(change=>change.action==='cancel_order'));
+  assert.ok(cancelOrder);assert.equal(cancelOrder.assessment.status,'allowed');
+  const adjusted=await transaction(client=>confirmBudgetAdjustment(client,ids.user,small.adjustmentId,{
+    acceptedOptionId:cancelOrder.optionId,expectedFinancialVersion:afterPayment.financial,
+    expectedPeriodVersion:afterPayment.period,confirmedByUser:true,
+  }));
+  assert.equal(adjusted.status,'executing');assert.equal(adjusted.cancellationRequestIds.length,1);
+  const refundJob=await claimNextJob();assert.ok(refundJob);assert.equal(refundJob.type,'simulate_refund_batch');
+  await processClaimedJob(refundJob);
+  const result=(await pool.query('SELECT status,refunded_minor FROM orders WHERE id=$1',[orderId])).rows[0];
+  assert.deepEqual(result,{status:'cancelled',refunded_minor:9900});
+  assert.equal((await pool.query(`SELECT count(*)::int AS n FROM finance_money_events
+    WHERE order_id=$1 AND event_type='refund_posted'`,[orderId])).rows[0].n,1);
+  assert.equal((await pool.query('SELECT status FROM budget_adjustment_proposals WHERE id=$1',[small.adjustmentId])).rows[0].status,'complete');
+  assert.ok(Number((await pool.query('SELECT count(*) AS n FROM budget_events WHERE period_id=$1',[ids.period])).rows[0].n)>=8);
+});
+
+test('B02/B07 新消费者 Agent 真实运行只保存待确认草稿',async()=>{
+  const {createAssistantMessageEventStream}=await import('@earendil-works/pi-ai');
+  const {startConsumerAgentRun,executeConsumerAgentRun,readConsumerAgentRun}=await import('./consumer-agent-runtime.js');
+  const userId=randomUUID();
+  await pool.query(`INSERT INTO users(id,email,display_name,role,password_hash)
+    VALUES($1,$2,'规划 Agent 消费者','consumer','disabled')`,[userId,`${userId}@test.local`]);
+  await resetModelLedger();
+  try {
+    const user={id:userId,email:'',displayName:'',role:'consumer' as const};
+    const run=await startConsumerAgentRun(user,'consumer-agent-b07',{message:'帮我记录一次朋友聚餐',periodId:null});
+    let calls=0;
+    await executeConsumerAgentRun(run.runId,user,'帮我记录一次朋友聚餐',null,new AbortController().signal,(model)=>{
+      calls++;
+      const stream=createAssistantMessageEventStream();
+      const tool=calls===1;
+      stream.push({type:'done',reason:tool?'toolUse':'stop',message:{role:'assistant',api:model.api,
+        provider:model.provider,model:model.id,timestamp:Date.now(),stopReason:tool?'toolUse':'stop',
+        content:tool?[{type:'toolCall',id:'save-draft',name:'save_planning_draft',arguments:{
+          periodId:null,expectedFinancialVersion:null,expectedPeriodVersion:null,items:[{
+            title:'朋友聚餐',plannedOn:null,userEstimatedAmountMinor:null,priority:null,
+            requirements:['与朋友吃饭'],catalogItemId:null,suggestion:null,
+          }],
+        }}]:[{type:'text',text:'需求草稿已保存，日期、预算和优先级仍需你确认。'}],
+        usage:{input:10,cacheRead:0,cacheWrite:0,output:5,totalTokens:15,
+          cost:{input:0,cacheRead:0,cacheWrite:0,output:0,total:0}}}});
+      return stream;
+    });
+    const result=await readConsumerAgentRun(user,run.runId);
+    assert.equal(result.state,'COMPLETED');assert.equal(result.toolCalls,1);assert.equal(calls,2);
+    assert.equal((await pool.query(`SELECT count(*)::int AS n FROM planning_drafts
+      WHERE owner_id=$1 AND period_id IS NULL`,[userId])).rows[0].n,1);
+    assert.equal((await pool.query('SELECT count(*)::int AS n FROM orders WHERE owner_id=$1',[userId])).rows[0].n,0);
+  } finally {
+    await resetModelLedger();
+  }
 });
 
 const { processChannelJob } = await import('./channel-worker.js');
@@ -481,8 +631,7 @@ test('API-24 确定性 Pi 只读循环持久化输出与人民币费用，重复
   const {createAssistantMessageEventStream}=await import('@earendil-works/pi-ai');
   const f=await fixture();let calls=0;
   // Only the isolated test schema ledger is reset; never the development ledger.
-  await pool.query('DELETE FROM model_usage');
-  await pool.query('UPDATE model_budget SET spent_micros=0,reserved_micros=0 WHERE id=1');
+  await resetModelLedger();
   const testApp=await buildApp({agentStream:(model)=>{
     calls++;
     const events=createAssistantMessageEventStream();
@@ -509,7 +658,7 @@ test('API-24 确定性 Pi 只读循环持久化输出与人民币费用，重复
     assert.equal((await testApp.inject(request)).json().runId,runId);assert.equal(calls,2);
     const budget=(await pool.query('SELECT spent_micros,reserved_micros FROM model_budget')).rows[0];
     assert.equal(Number(budget.spent_micros),122);assert.equal(Number(budget.reserved_micros),0);
-  } finally {await testApp.close();}
+  } finally {await testApp.close();await resetModelLedger();}
 });
 
 test('Agent 调用中取消保留未知费用，不能回写完成或改变订单',async()=>{

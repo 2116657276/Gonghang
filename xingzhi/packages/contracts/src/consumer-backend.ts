@@ -166,6 +166,69 @@ export const purchaseIntentConfirmInput = z.object({
   confirmedByUser: z.literal(true),
 }).strict();
 
+export const purchaseIntentView = z.object({
+  purchaseIntentId: uuid,
+  periodId: uuid,
+  budgetItemId: uuid,
+  quoteId: uuid,
+  assessmentId: uuid,
+  status: z.literal('proposed'),
+  item: z.object({
+    title: z.string().min(1),
+    plannedOn: date,
+    userEstimatedAmountMinor: nonnegativeMinor,
+  }).strict(),
+  offer: z.object({
+    catalogItemId: uuid,
+    name: z.string().min(1),
+    provider: z.string().trim().min(2).max(80),
+    quoteSource: z.enum(['demo', 'channel_api']),
+    quotedAmountMinor: positiveMinor,
+    currency: z.literal('CNY'),
+    quoteVersion: version,
+    ruleVersion: version,
+    ruleLabel: z.string().min(1),
+    ruleSnapshot: z.record(z.unknown()),
+  }).strict(),
+  funding: z.object({
+    status: z.literal('allowed'),
+    financialVersion: version,
+    periodVersion: version,
+    incrementalImpactMinor: z.number().int().safe(),
+    shortfallMinor: nonnegativeMinor,
+    affectedDates: z.array(date),
+    reasonCodes: z.array(z.string().trim().min(1).max(80)),
+  }).strict(),
+  confirmationRequired: z.literal(true),
+  expiresAt: instant,
+  createdAt: instant,
+}).strict();
+
+export const consumerOrderView = z.object({
+  orderId: uuid,
+  purchaseIntentId: uuid,
+  budgetPeriodId: uuid,
+  itemName: z.string().min(1),
+  amountMinor: positiveMinor,
+  currency: z.literal('CNY'),
+  environment: z.enum(['simulation', 'sandbox']),
+  provider: z.enum(['simulation', 'alipay']),
+  status: z.enum(['created', 'fulfilling', 'cancellation_processing', 'fulfilled', 'cancelled', 'cancellation_rejected']),
+  paymentStatus: z.enum(['pending', 'paid', 'unknown', 'closed', 'failed']),
+  refundedMinor: nonnegativeMinor,
+  createdAt: instant,
+  updatedAt: instant,
+}).strict();
+
+export const purchaseIntentConfirmationView = z.object({
+  purchaseIntentId: uuid,
+  status: z.literal('ordered'),
+  order: consumerOrderView,
+  financialVersion: version,
+  periodVersion: version,
+  paymentHandoffRequired: z.literal(true),
+}).strict();
+
 export const emergencyAssessInput = z.object({
   periodId: uuid,
   amountMinor: positiveMinor,
@@ -180,6 +243,58 @@ export const budgetAdjustmentConfirmInput = z.object({
   expectedFinancialVersion: version,
   expectedPeriodVersion: version,
   confirmedByUser: z.literal(true),
+}).strict();
+
+export const budgetAdjustmentAssessment = z.object({
+  status: z.enum(fundingStatuses),
+  shortfallMinor: nonnegativeMinor.nullable(),
+  affectedDates: z.array(date),
+  reasonCodes: z.array(z.string().trim().min(1).max(80)),
+}).strict();
+
+export const budgetAdjustmentOption = z.object({
+  optionId: uuid,
+  label: z.string().trim().min(1).max(200),
+  changes: z.array(z.discriminatedUnion('action', [
+    z.object({ budgetItemId: uuid, action: z.literal('cancel') }).strict(),
+    z.object({
+      budgetItemId: uuid,
+      orderId: uuid,
+      action: z.literal('cancel_order'),
+      ruleVersion: version,
+      cancellationRule: z.enum(['full_refund', 'fee_80', 'two_batches', 'reject', 'delay']),
+      feeMinor: nonnegativeMinor,
+      refundableMinor: nonnegativeMinor,
+    }).strict(),
+  ])),
+  assessment: budgetAdjustmentAssessment,
+}).strict();
+
+export const budgetAdjustmentProposalView = z.object({
+  adjustmentId: uuid,
+  periodId: uuid,
+  status: z.literal('proposed'),
+  basisFinancialVersion: version,
+  basisPeriodVersion: version,
+  emergency: z.object({
+    amountMinor: positiveMinor,
+    plannedOn: date,
+    reason: z.string().trim().min(2).max(200),
+  }).strict(),
+  baseline: budgetAdjustmentAssessment,
+  options: z.array(budgetAdjustmentOption).min(1),
+  expiresAt: instant,
+}).strict();
+
+export const budgetAdjustmentConfirmationView = z.object({
+  adjustmentId: uuid,
+  status: z.enum(['executing', 'complete', 'pending_review']),
+  acceptedOptionId: uuid,
+  emergencyItem: budgetItemView,
+  cancelledItemIds: z.array(uuid),
+  cancellationRequestIds: z.array(uuid),
+  financialVersion: version,
+  periodVersion: version,
 }).strict();
 
 export const planningDraftSuggestion = z.object({
@@ -312,11 +427,17 @@ export type AssessPurchaseInput = z.infer<typeof assessPurchaseInput>;
 export type FundingAssessment = z.infer<typeof fundingAssessment>;
 export type PurchaseIntentCreateInput = z.infer<typeof purchaseIntentCreateInput>;
 export type PurchaseIntentConfirmInput = z.infer<typeof purchaseIntentConfirmInput>;
+export type PurchaseIntentView = z.infer<typeof purchaseIntentView>;
+export type ConsumerOrderView = z.infer<typeof consumerOrderView>;
+export type PurchaseIntentConfirmationView = z.infer<typeof purchaseIntentConfirmationView>;
 export type VerifiedMoneyEvent = z.infer<typeof verifiedMoneyEvent>;
 export type BudgetPeriodReview = z.infer<typeof budgetPeriodReview>;
 export type OfferQuote = z.infer<typeof offerQuote>;
 export type BudgetItemView = z.infer<typeof budgetItemView>;
 export type BudgetAdjustmentConfirmInput = z.infer<typeof budgetAdjustmentConfirmInput>;
+export type BudgetAdjustmentOption = z.infer<typeof budgetAdjustmentOption>;
+export type BudgetAdjustmentProposalView = z.infer<typeof budgetAdjustmentProposalView>;
+export type BudgetAdjustmentConfirmationView = z.infer<typeof budgetAdjustmentConfirmationView>;
 export type PlanningDraftInput = z.infer<typeof planningDraftInput>;
 export type PlanningDraftItem = z.infer<typeof planningDraftItem>;
 export type PlanningDraftAssessment = z.infer<typeof planningDraftAssessment>;

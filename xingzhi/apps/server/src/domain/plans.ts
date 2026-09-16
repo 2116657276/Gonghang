@@ -71,27 +71,37 @@ type ManualTaskRow = {
 
 export async function planSnapshot(client: PoolClient, planId: string, user: AuthUser): Promise<PlanSnapshot> {
   const plan = await readablePlan(client, planId, user);
-  const [itemsResult, ordersResult, operationsResult, authorizationsResult, cancellationsResult, batchesResult, manualTasksResult] = await Promise.all([
-    client.query<PlanItemRow>('SELECT id, catalog_item_id, name, kind, price_minor, status FROM plan_items WHERE plan_id = $1 ORDER BY position', [planId]),
-    client.query<OrderRow>(`SELECT id, plan_item_id, item_name, amount_minor, status, payment_status, simulation_mode,
+  const itemsResult = await client.query<PlanItemRow>(
+    'SELECT id, catalog_item_id, name, kind, price_minor, status FROM plan_items WHERE plan_id = $1 ORDER BY position',
+    [planId],
+  );
+  const ordersResult = await client.query<OrderRow>(`SELECT id, plan_item_id, item_name, amount_minor, status, payment_status, simulation_mode,
       close_simulation_mode, refund_simulation_mode, reserved_minor, refunded_minor,
       environment, provider
-      FROM orders WHERE plan_id = $1 ORDER BY created_at`, [planId]),
-    client.query<{ type: string }>(`SELECT type FROM operations WHERE plan_id = $1 AND state IN ('accepted', 'processing', 'unknown', 'pending_review') ORDER BY created_at`, [planId]),
-    client.query<AuthorizationRow>(`SELECT id, type, status, scope, expires_at FROM authorizations
-      WHERE plan_id = $1 ORDER BY created_at DESC`, [planId]),
-    client.query<CancellationRow>(`SELECT cancellation_requests.id, cancellation_requests.order_id, cancellation_requests.status,
+      FROM orders WHERE plan_id = $1 ORDER BY created_at`, [planId]);
+  const operationsResult = await client.query<{ type: string }>(
+    `SELECT type FROM operations WHERE plan_id = $1
+      AND state IN ('accepted', 'processing', 'unknown', 'pending_review') ORDER BY created_at`,
+    [planId],
+  );
+  const authorizationsResult = await client.query<AuthorizationRow>(
+    'SELECT id, type, status, scope, expires_at FROM authorizations WHERE plan_id = $1 ORDER BY created_at DESC',
+    [planId],
+  );
+  const cancellationsResult = await client.query<CancellationRow>(`SELECT cancellation_requests.id, cancellation_requests.order_id, cancellation_requests.status,
       cancellation_requests.decision, cancellation_requests.decision_reason, cancellation_requests.accepted_fee_minor,
       cancellation_requests.accepted_refund_minor, cancellation_requests.updated_at
       FROM cancellation_requests JOIN orders ON orders.id = cancellation_requests.order_id
-      WHERE orders.plan_id = $1 ORDER BY cancellation_requests.updated_at DESC`, [planId]),
-    client.query<RefundBatchRow>(`SELECT refund_batches.id, refund_batches.operation_id, refund_batches.cancellation_request_id, refund_batches.batch_number,
+      WHERE orders.plan_id = $1 ORDER BY cancellation_requests.updated_at DESC`, [planId]);
+  const batchesResult = await client.query<RefundBatchRow>(`SELECT refund_batches.id, refund_batches.operation_id, refund_batches.cancellation_request_id, refund_batches.batch_number,
       refund_batches.amount_minor, refund_batches.status, refund_batches.updated_at
       FROM refund_batches JOIN orders ON orders.id = refund_batches.order_id
-      WHERE orders.plan_id = $1 ORDER BY refund_batches.batch_number`, [planId]),
-    client.query<ManualTaskRow>(`SELECT id, order_id, cancellation_request_id, type, state, reason, next_action, next_review_at
-      FROM manual_tasks WHERE plan_id = $1 ORDER BY next_review_at`, [planId]),
-  ]);
+      WHERE orders.plan_id = $1 ORDER BY refund_batches.batch_number`, [planId]);
+  const manualTasksResult = await client.query<ManualTaskRow>(
+    `SELECT id, order_id, cancellation_request_id, type, state, reason, next_action, next_review_at
+      FROM manual_tasks WHERE plan_id = $1 ORDER BY next_review_at`,
+    [planId],
+  );
   const orders = ordersResult.rows;
   const paid = sumMinor(orders.filter((order) => order.payment_status === 'paid').map((order) => order.amount_minor));
   const refunded = sumMinor(orders.map((order) => order.refunded_minor));

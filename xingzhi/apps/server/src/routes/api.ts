@@ -32,6 +32,7 @@ import { cancellationRuleDetails, cancellationRules, ensureManualTask, initialDe
 import { queryAlipayTrade, sandboxReadiness, verifyAlipayNotification, yuanToMinor } from '../payment/alipay-sandbox.js';
 import { evidenceSections, maskIdentifier, renderEvidenceHtml, sanitizeEvidence, type EvidenceDocument, type EvidenceSection } from '../domain/evidence.js';
 import { recheckInput, requestOperationRecheck } from '../domain/operation-rechecks.js';
+import { applyVerifiedMoneyEvent } from '../domain/verified-money-event.js';
 
 const paramsWithId = z.object({ id: z.string().uuid() });
 const cursorQuery = z.object({ cursor: z.coerce.number().int().min(0).default(0) });
@@ -69,6 +70,34 @@ type PaymentNotificationBody = {
   rawPayload: Record<string, string>;
   values: Record<string, string>;
 };
+
+type PaymentOrderScope = {
+  id: string;
+  owner_id: string;
+  plan_id: string | null;
+  budget_period_id: string | null;
+  account_source: 'demo' | 'bank_api' | null;
+  amount_minor: number;
+};
+
+async function appendPaymentScopeEvent(client: PoolClient, order: PaymentOrderScope,
+  actorId: string | null, type: string, data: Record<string, unknown>) {
+  if (order.plan_id) return appendEvent(client, order.plan_id, actorId, type, data);
+  if (!order.budget_period_id) throw new Error('订单缺少计划或预算周期范围。');
+  await client.query(`INSERT INTO budget_events (owner_id,period_id,actor_id,type,data)
+    VALUES($1,$2,$3,$4,$5)`, [order.owner_id, order.budget_period_id, actorId, type, data]);
+}
+
+async function recordSandboxObservation(client: PoolClient, order: PaymentOrderScope,
+  providerEventId: string, eventType: 'payment_pending' | 'payment_failed' | 'result_unknown',
+  verificationState: 'verified' | 'unknown', occurredAt: string) {
+  if (!order.budget_period_id || !order.account_source) return;
+  await applyVerifiedMoneyEvent(client, order.owner_id, {
+    orderId: order.id, provider: 'alipay', providerEventId, eventType,
+    amountMinor: order.amount_minor, currency: 'CNY', occurredAt,
+    verificationState, source: order.account_source,
+  });
+}
 
 type EvidenceEventRow = {
   id: number;
@@ -453,12 +482,17 @@ export async function registerApi(app: FastifyInstance) {
 
     const order = await transaction(async (client) => {
       const result = await client.query<{
-        id: string; plan_id: string; owner_id: string; amount_minor: number; environment: string; payment_status: string;
+        id: string; plan_id: string | null; budget_period_id: string | null;
+        account_source: 'demo' | 'bank_api' | null; owner_id: string; amount_minor: number;
+        environment: string; payment_status: string;
         business_number: string; operation_id: string | null;
-      }>(`SELECT orders.id, orders.plan_id, orders.owner_id, orders.amount_minor, orders.environment, orders.payment_status,
+      }>(`SELECT orders.id,orders.plan_id,orders.budget_period_id,a.source AS account_source,
+          orders.owner_id,orders.amount_minor,orders.environment,orders.payment_status,
           payment_attempts.business_number,
           (SELECT id FROM operations WHERE entity_id = orders.id AND type = 'sandbox_payment_handoff' ORDER BY created_at DESC LIMIT 1) AS operation_id
         FROM orders JOIN payment_attempts ON payment_attempts.order_id = orders.id
+        LEFT JOIN budget_periods p ON p.id=orders.budget_period_id
+        LEFT JOIN finance_accounts a ON a.id=p.primary_account_id
         WHERE orders.id = $1`, [orderId]);
       const row = result.rows[0];
       if (!row || row.owner_id !== context.user.id) notFound('未找到可复核的沙箱订单。');
@@ -503,8 +537,13 @@ export async function registerApi(app: FastifyInstance) {
       {},
       async () => {
         const currentResult = await client.query<{
-          id: string; plan_id: string; amount_minor: number; payment_status: string;
-        }>('SELECT id, plan_id, amount_minor, payment_status FROM orders WHERE id = $1 FOR UPDATE', [orderId]);
+          id: string; owner_id: string; plan_id: string | null; budget_period_id: string | null;
+          account_source: 'demo' | 'bank_api' | null; amount_minor: number; payment_status: string;
+        }>(`SELECT o.id,o.owner_id,o.plan_id,o.budget_period_id,a.source AS account_source,
+          o.amount_minor,o.payment_status FROM orders o
+          LEFT JOIN budget_periods p ON p.id=o.budget_period_id
+          LEFT JOIN finance_accounts a ON a.id=p.primary_account_id
+          WHERE o.id=$1 FOR UPDATE OF o`, [orderId]);
         const current = currentResult.rows[0];
         if (!current) notFound('未找到可复核的沙箱订单。');
         if (!['pending', 'unknown'].includes(current.payment_status)) {
@@ -529,7 +568,7 @@ export async function registerApi(app: FastifyInstance) {
                 order.operation_id, { source: 'alipay_query', paymentStatus: 'pending', providerStatus, observedAt },
               ]);
             }
-            await appendEvent(client, current.plan_id, context.user.id, 'sandbox.payment_query_pending', { orderId, providerStatus, observedAt });
+            await appendPaymentScopeEvent(client, current, context.user.id, 'sandbox.payment_query_pending', { orderId, providerStatus, observedAt });
             return { orderId, environment: 'sandbox', paymentStatus: 'pending', providerStatus, source: 'alipay_query', observedAt };
           }
           await client.query("UPDATE orders SET payment_status = 'unknown', updated_at = now() WHERE id = $1", [orderId]);
@@ -539,7 +578,8 @@ export async function registerApi(app: FastifyInstance) {
               order.operation_id, { source: 'alipay_query', providerStatus, observedAt },
             ]);
           }
-          await appendEvent(client, current.plan_id, context.user.id, 'sandbox.payment_query_unknown', { orderId, providerStatus, observedAt });
+          await recordSandboxObservation(client,current,`ALIPAY_QUERY_UNKNOWN_${context.key}`,'result_unknown','unknown',observedAt);
+          await appendPaymentScopeEvent(client, current, context.user.id, 'sandbox.payment_query_unknown', { orderId, providerStatus, observedAt });
           return { orderId, environment: 'sandbox', paymentStatus: 'unknown', providerStatus, source: 'alipay_query', observedAt };
         }
 
@@ -551,7 +591,8 @@ export async function registerApi(app: FastifyInstance) {
               order.operation_id, { source: 'alipay_query', providerStatus, reason: '订单号、金额或卖家不匹配', observedAt },
             ]);
           }
-          await appendEvent(client, current.plan_id, context.user.id, 'sandbox.payment_query_rejected', { orderId, providerStatus, observedAt });
+          await recordSandboxObservation(client,current,`ALIPAY_QUERY_REJECTED_${context.key}`,'result_unknown','unknown',observedAt);
+          await appendPaymentScopeEvent(client, current, context.user.id, 'sandbox.payment_query_rejected', { orderId, providerStatus, observedAt });
           return { orderId, environment: 'sandbox', paymentStatus: 'unknown', providerStatus, source: 'alipay_query', observedAt };
         }
 
@@ -565,7 +606,9 @@ export async function registerApi(app: FastifyInstance) {
               order.operation_id, { source: 'alipay_query', paymentStatus: 'paid', providerStatus, observedAt },
             ]);
           }
-          await appendEvent(client, current.plan_id, context.user.id, 'sandbox.payment_query_confirmed', { orderId, tradeNo: observed.tradeNo ?? null, observedAt });
+          await recordSandboxObservation(client,current,
+            `ALIPAY_PAYMENT_${observed.tradeNo ?? order.business_number}`,'payment_pending','verified',observedAt);
+          await appendPaymentScopeEvent(client, current, context.user.id, 'sandbox.payment_query_confirmed', { orderId, tradeNo: observed.tradeNo ?? null, observedAt });
           return { orderId, environment: 'sandbox', paymentStatus: 'paid', providerStatus, source: 'alipay_query', observedAt };
         }
 
@@ -579,7 +622,9 @@ export async function registerApi(app: FastifyInstance) {
               order.operation_id, { source: 'alipay_query', paymentStatus: 'closed', providerStatus, observedAt },
             ]);
           }
-          await appendEvent(client, current.plan_id, context.user.id, 'sandbox.payment_query_closed', { orderId, tradeNo: observed.tradeNo ?? null, observedAt });
+          await recordSandboxObservation(client,current,
+            `ALIPAY_CLOSED_${observed.tradeNo ?? order.business_number}`,'payment_failed','verified',observedAt);
+          await appendPaymentScopeEvent(client, current, context.user.id, 'sandbox.payment_query_closed', { orderId, tradeNo: observed.tradeNo ?? null, observedAt });
           return { orderId, environment: 'sandbox', paymentStatus: 'closed', providerStatus, source: 'alipay_query', observedAt };
         }
 
@@ -589,7 +634,7 @@ export async function registerApi(app: FastifyInstance) {
             order.operation_id, { source: 'alipay_query', paymentStatus: 'pending', providerStatus, observedAt },
           ]);
         }
-        await appendEvent(client, current.plan_id, context.user.id, 'sandbox.payment_query_pending', { orderId, providerStatus, observedAt });
+        await appendPaymentScopeEvent(client, current, context.user.id, 'sandbox.payment_query_pending', { orderId, providerStatus, observedAt });
         return { orderId, environment: 'sandbox', paymentStatus: 'pending', providerStatus, source: 'alipay_query', observedAt };
       },
     ));
@@ -626,10 +671,15 @@ export async function registerApi(app: FastifyInstance) {
       }
 
       const orderResult = await client.query<{
-        id: string; plan_id: string; merchant_id: string; amount_minor: number; payment_status: string; status: string; refunded_minor: number;
-      }>(`SELECT orders.id, orders.plan_id, orders.amount_minor, orders.payment_status
-          , orders.merchant_id, orders.status, orders.refunded_minor
+        id: string; owner_id: string; plan_id: string | null; budget_period_id: string | null;
+        account_source: 'demo' | 'bank_api' | null; merchant_id: string | null;
+        amount_minor: number; payment_status: string; status: string; refunded_minor: number;
+      }>(`SELECT orders.id,orders.owner_id,orders.plan_id,orders.budget_period_id,
+          a.source AS account_source,orders.amount_minor,orders.payment_status,
+          orders.merchant_id,orders.status,orders.refunded_minor
           FROM orders JOIN payment_attempts ON payment_attempts.order_id = orders.id
+          LEFT JOIN budget_periods p ON p.id=orders.budget_period_id
+          LEFT JOIN finance_accounts a ON a.id=p.primary_account_id
           WHERE payment_attempts.business_number = $1 AND orders.environment = 'sandbox'
           FOR UPDATE OF orders, payment_attempts`, [values.out_trade_no]);
       const order = orderResult.rows[0];
@@ -657,11 +707,15 @@ export async function registerApi(app: FastifyInstance) {
         await client.query(`INSERT INTO payment_notifications (id, environment, provider, notification_id, raw_body, payload, signature_valid, processing_state, order_id)
           VALUES ($1,'sandbox','alipay',$2,$3,$4,true,'quarantined',$5)`, [randomUUID(), values.notify_id, rawBody, values, order.id]);
         await ensureManualTask(client, {
-          dedupeKey: `payment-conflict:${order.id}`, planId: order.plan_id, merchantId: order.merchant_id, orderId: order.id,
+          dedupeKey: `payment-conflict:${order.id}`,
+          ...(order.plan_id && order.merchant_id
+            ? { planId: order.plan_id, merchantId: order.merchant_id }
+            : { budgetPeriodId: order.budget_period_id!, responsibleProvider: 'alipay' }),
+          orderId: order.id,
           type: 'operation_recheck', reason: '渠道付款通知与本地已关单、失败或退款事实冲突。',
           nextAction: '核对原付款业务编号及关单／退款事实；不得直接重新打开订单或重复记账。',
         });
-        await appendEvent(client, order.plan_id, null, 'sandbox.payment_conflict_requires_review', {
+        await appendPaymentScopeEvent(client, order, null, 'sandbox.payment_conflict_requires_review', {
           orderId: order.id, providerStatus: status, reason: '保留本地已确认事实并转人工复核',
         });
         return true;
@@ -670,7 +724,7 @@ export async function registerApi(app: FastifyInstance) {
       await client.query(`INSERT INTO payment_notifications (id, environment, provider, notification_id, raw_body, payload, signature_valid, processing_state, order_id)
         VALUES ($1,'sandbox','alipay',$2,$3,$4,true,'applied',$5)`, [randomUUID(), values.notify_id, rawBody, values, order.id]);
       if (order.payment_status === 'paid') {
-        await appendEvent(client, order.plan_id, null, 'sandbox.payment_observation_retained', {
+        await appendPaymentScopeEvent(client, order, null, 'sandbox.payment_observation_retained', {
           orderId: order.id, providerStatus: status, reason: '保留历史付款及已有取消退款状态' });
         return true;
       }
@@ -681,7 +735,10 @@ export async function registerApi(app: FastifyInstance) {
         await client.query("UPDATE operations SET state = 'succeeded', result = $2, lease_until = NULL, updated_at = now() WHERE entity_id = $1 AND type = 'sandbox_payment_handoff'", [
           order.id, { source: 'alipay_sandbox_notify', paymentStatus: 'paid', observedAt: new Date().toISOString() },
         ]);
-        await appendEvent(client, order.plan_id, null, 'sandbox.payment_confirmed', { orderId: order.id, tradeNo: values.trade_no ?? null, observedAt: new Date().toISOString() });
+        const observedAt=new Date().toISOString();
+        await recordSandboxObservation(client,order,
+          `ALIPAY_PAYMENT_${values.trade_no ?? values.out_trade_no}`,'payment_pending','verified',observedAt);
+        await appendPaymentScopeEvent(client, order, null, 'sandbox.payment_confirmed', { orderId: order.id, tradeNo: values.trade_no ?? null, observedAt });
         return true;
       }
       if (status === 'TRADE_CLOSED') {
@@ -691,11 +748,14 @@ export async function registerApi(app: FastifyInstance) {
         await client.query("UPDATE operations SET state = 'succeeded', result = $2, lease_until = NULL, updated_at = now() WHERE entity_id = $1 AND type = 'sandbox_payment_handoff'", [
           order.id, { source: 'alipay_sandbox_notify', paymentStatus: 'closed', observedAt: new Date().toISOString() },
         ]);
-        await appendEvent(client, order.plan_id, null, 'sandbox.payment_closed', { orderId: order.id, tradeNo: values.trade_no ?? null, observedAt: new Date().toISOString() });
+        const observedAt=new Date().toISOString();
+        await recordSandboxObservation(client,order,
+          `ALIPAY_CLOSED_${values.trade_no ?? values.out_trade_no}`,'payment_failed','verified',observedAt);
+        await appendPaymentScopeEvent(client, order, null, 'sandbox.payment_closed', { orderId: order.id, tradeNo: values.trade_no ?? null, observedAt });
         return true;
       }
       await client.query("UPDATE payment_attempts SET provider_status = $2, observed_at = now() WHERE order_id = $1", [order.id, status]);
-      await appendEvent(client, order.plan_id, null, 'sandbox.payment_waiting', { orderId: order.id, observedAt: new Date().toISOString() });
+      await appendPaymentScopeEvent(client, order, null, 'sandbox.payment_waiting', { orderId: order.id, observedAt: new Date().toISOString() });
       return true;
     });
     return reply.type('text/plain').code(applied ? 200 : 400).send(applied ? 'success' : 'fail');

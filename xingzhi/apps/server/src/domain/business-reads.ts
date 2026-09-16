@@ -40,8 +40,13 @@ export async function readCatalog() {
 
 export async function readCancellationQuote(user: AuthUser, id: string) {
     const result = await query<{ id: string; owner_id: string; amount_minor: number; payment_status: string; status: string; refunded_minor: number; cancellation_rule: CancellationRule; rule_version: number }>(`
-      SELECT orders.id, orders.owner_id, orders.amount_minor, orders.payment_status, orders.status, orders.refunded_minor, catalog_items.cancellation_rule, catalog_items.rule_version
-      FROM orders JOIN plan_items ON plan_items.id = orders.plan_item_id JOIN catalog_items ON catalog_items.id = plan_items.catalog_item_id
+      SELECT orders.id,orders.owner_id,orders.amount_minor,orders.payment_status,
+        orders.status,orders.refunded_minor,catalog_items.cancellation_rule,catalog_items.rule_version
+      FROM orders
+      LEFT JOIN plan_items ON plan_items.id=orders.plan_item_id
+      LEFT JOIN purchase_intents ON purchase_intents.id=orders.purchase_intent_id
+      JOIN catalog_items ON catalog_items.id=COALESCE(plan_items.catalog_item_id,
+        (SELECT catalog_item_id FROM offer_quotes WHERE id=purchase_intents.quote_id))
       WHERE orders.id = $1`, [id]);
     const order = result.rows[0];
     if (!order || user.role !== 'consumer' || order.owner_id !== user.id) notFound('未找到可查看的订单。');
@@ -55,14 +60,15 @@ export async function readCancellationQuote(user: AuthUser, id: string) {
 }
 
 export async function readOperation(user: AuthUser, id: string) {
-    const result = await query<{ id: string; plan_id: string; owner_id: string; type: string; state: string; purpose: string; result: Record<string, unknown>; updated_at: Date }>(
+    const result = await query<{ id: string; plan_id: string | null; owner_id: string; type: string; state: string; purpose: string; result: Record<string, unknown>; updated_at: Date }>(
       'SELECT id, plan_id, owner_id, type, state, purpose, result, updated_at FROM operations WHERE id = $1', [id]);
     const operation = result.rows[0];
     if (!operation) notFound('未找到可查看的操作。');
     if (user.role === 'consumer') {
       if (operation.owner_id !== user.id) notFound('未找到可查看的操作。');
     } else if (user.role === 'reviewer') {
-      await transaction((client) => readablePlan(client, operation.plan_id, user));
+      if (!operation.plan_id) notFound('未找到可查看的操作。');
+      await transaction((client) => readablePlan(client, operation.plan_id!, user));
     } else {
       notFound('未找到可查看的操作。');
     }

@@ -11,6 +11,7 @@ import { remainingBudget, sumMinor } from './money.js';
 import { cancellationRuleDetails, ensureManualTask, initialDecisionForRule, type CancellationRule } from './aftercare.js';
 import { createAlipayHandoff, sandboxReadiness } from '../payment/alipay-sandbox.js';
 import type { PlanItemRow } from './proposals.js';
+import { prepareConsumerPaymentHandoff } from './consumer-orders.js';
 
 type ProposalRow = { id:string; plan_id:string; owner_id:string; type:'purchase'|'change'; plan_version:number; snapshot:Record<string,any>; status:string; expires_at:Date };
 
@@ -106,8 +107,11 @@ export async function createConfirmedOrder(client: PoolClient, user: AuthUser, r
 
 export async function preparePaymentHandoff(client: PoolClient, user: AuthUser, orderId: string) {
   if (user.role !== 'consumer') forbidden();
-  const target = (await client.query<{plan_id:string}>('SELECT plan_id FROM orders WHERE id=$1 AND owner_id=$2',[orderId,user.id])).rows[0];
+  const target = (await client.query<{plan_id:string|null;budget_period_id:string|null}>(
+    'SELECT plan_id,budget_period_id FROM orders WHERE id=$1 AND owner_id=$2',[orderId,user.id])).rows[0];
   if (!target) notFound();
+  if (target.budget_period_id) return prepareConsumerPaymentHandoff(client, user.id, orderId);
+  if (!target.plan_id) notFound();
   const plan = await ownedPlan(client,target.plan_id,user,true);
   const result = await client.query<{
     id: string; plan_id: string; owner_id: string; item_name: string; amount_minor: number; environment: string; payment_status: string; business_number: string; purchase_authorization_id:string; plan_item_id:string;

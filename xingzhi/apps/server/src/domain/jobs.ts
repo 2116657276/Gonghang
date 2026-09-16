@@ -13,7 +13,8 @@ export type OperationType =
   | 'sandbox_refund';
 
 type OperationInput = {
-  planId: string;
+  planId?: string;
+  budgetPeriodId?: string;
   ownerId: string;
   type: OperationType;
   entityId: string;
@@ -22,11 +23,16 @@ type OperationInput = {
 };
 
 export async function createOperation(client: PoolClient, input: OperationInput) {
+  if (Boolean(input.planId) === Boolean(input.budgetPeriodId)) {
+    throw new Error('操作必须且只能绑定旧计划或新预算周期。');
+  }
   const operationId = randomUUID();
   await client.query(
-    `INSERT INTO operations (id, plan_id, owner_id, type, entity_id, authorization_id, purpose)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-    [operationId, input.planId, input.ownerId, input.type, input.entityId, input.authorizationId ?? null, input.purpose],
+    `INSERT INTO operations
+      (id, plan_id, budget_period_id, owner_id, type, entity_id, authorization_id, purpose)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+    [operationId, input.planId ?? null, input.budgetPeriodId ?? null, input.ownerId,
+      input.type, input.entityId, input.authorizationId ?? null, input.purpose],
   );
   return operationId;
 }

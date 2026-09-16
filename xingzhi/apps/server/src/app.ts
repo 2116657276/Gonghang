@@ -6,6 +6,8 @@ import { registerFinanceAccountApi } from './routes/finance-accounts.js';
 import { registerFinanceAssessmentApi } from './routes/finance-assessments.js';
 import { registerBudgetPeriodReviewApi } from './routes/budget-period-review.js';
 import { registerBudgetPeriodApi } from './routes/budget-periods.js';
+import { registerPurchaseIntentApi } from './routes/purchase-intents.js';
+import { registerBudgetAdjustmentApi } from './routes/budget-adjustments.js';
 import cookie from '@fastify/cookie';
 import cors from '@fastify/cors';
 import { ZodError } from 'zod';
@@ -62,6 +64,8 @@ await app.register(registerFinanceAccountApi);
 await app.register(registerFinanceAssessmentApi);
 await app.register(registerBudgetPeriodReviewApi);
 await app.register(registerBudgetPeriodApi);
+await app.register(registerPurchaseIntentApi);
+await app.register(registerBudgetAdjustmentApi);
 await app.register(registerBudgetItemApi, {
   budgetItemPort: options.budgetItemPort ?? { applyBudgetItemChange, cancelBudgetItem },
 });

@@ -25,8 +25,10 @@ export function initialDecisionForRule(rule: CancellationRule) {
 
 type ManualTaskInput = {
   dedupeKey: string;
-  planId: string;
-  merchantId: string;
+  planId?: string;
+  merchantId?: string;
+  budgetPeriodId?: string;
+  responsibleProvider?: string;
   orderId?: string;
   cancellationRequestId?: string;
   refundBatchId?: string;
@@ -38,17 +40,23 @@ type ManualTaskInput = {
 };
 
 export async function ensureManualTask(client: PoolClient, input: ManualTaskInput) {
+  const legacy = Boolean(input.planId && input.merchantId);
+  const consumer = Boolean(input.budgetPeriodId && input.responsibleProvider);
+  if (legacy === consumer) throw new Error('人工任务必须且只能绑定旧计划或新预算周期。');
   const result = await client.query<{ id: string; state: string }>(`
     INSERT INTO manual_tasks (
-      id, dedupe_key, plan_id, merchant_id, order_id, cancellation_request_id, refund_batch_id, operation_id,
+      id, dedupe_key, plan_id, merchant_id,budget_period_id,responsible_provider,
+      order_id, cancellation_request_id, refund_batch_id, operation_id,
       type, reason, next_action, next_review_at
-    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
     ON CONFLICT (dedupe_key) DO UPDATE SET updated_at = now()
     RETURNING id, state
   `, [
-    randomUUID(), input.dedupeKey, input.planId, input.merchantId, input.orderId ?? null,
+    randomUUID(), input.dedupeKey, input.planId ?? null, input.merchantId ?? null,
+    input.budgetPeriodId ?? null, input.responsibleProvider ?? null, input.orderId ?? null,
     input.cancellationRequestId ?? null, input.refundBatchId ?? null, input.operationId ?? null,
-    input.type, input.reason, input.nextAction, input.nextReviewAt ?? new Date(Date.now() + 24 * 60 * 60 * 1000),
+    input.type, input.reason, input.nextAction,
+    input.nextReviewAt ?? new Date(Date.now() + 24 * 60 * 60 * 1000),
   ]);
   return result.rows[0]!;
 }

@@ -5,10 +5,14 @@ import { closeAlipayTrade, queryAlipayTrade, queryAlipayRefund, refundAlipayTrad
 import { appendEvent } from './events.js';
 import { ensureManualTask } from './aftercare.js';
 import type { ClaimedJob } from './worker-runtime.js';
+import { applyVerifiedMoneyEvent } from './verified-money-event.js';
 
 export const channelAdapter = { queryTrade: queryAlipayTrade, closeTrade: closeAlipayTrade, refund: refundAlipayTrade, queryRefund: queryAlipayRefund };
 type Context = {
-  order_id: string; plan_id: string; merchant_id: string; amount_minor: number; refunded_minor: number;
+  owner_id: string;
+  order_id: string; plan_id: string | null; budget_period_id: string | null;
+  merchant_id: string | null; account_source: 'demo' | 'bank_api' | null;
+  amount_minor: number; refunded_minor: number;
   payment_status: string; provider_status: string | null; business_number: string; environment: string; provider: string;
   cancellation_id: string | null; batch_id: string | null; refund_number: string | null; refund_amount: number | null;
   batch_status: string | null; accepted_refund_minor: number | null; cancellation_status: string | null;
@@ -16,8 +20,16 @@ type Context = {
 };
 
 async function lockContext(client: PoolClient, job: ClaimedJob) {
-  await client.query('SELECT id FROM plans WHERE id=$1 FOR UPDATE', [job.plan_id]);
-  const result = await client.query<Context>(`SELECT o.id AS order_id,o.plan_id,o.merchant_id,o.amount_minor,o.refunded_minor,
+  if (job.plan_id) {
+    await client.query('SELECT id FROM plans WHERE id=$1 FOR UPDATE', [job.plan_id]);
+  } else if (job.budget_period_id) {
+    await client.query(`SELECT a.id FROM budget_periods p JOIN finance_accounts a ON a.id=p.primary_account_id
+      WHERE p.id=$1 AND p.owner_id=$2 FOR UPDATE OF a,p`, [job.budget_period_id, job.owner_id]);
+  } else {
+    throw new Error('渠道任务缺少业务范围。');
+  }
+  const result = await client.query<Context>(`SELECT o.id AS order_id,op.owner_id,o.plan_id,o.budget_period_id,
+    o.merchant_id,a.source AS account_source,o.amount_minor,o.refunded_minor,
     o.payment_status,p.provider_status,p.business_number,o.environment,o.provider,c.id AS cancellation_id,b.id AS batch_id,
     b.business_number AS refund_number,b.amount_minor AS refund_amount,b.status AS batch_status,
     c.accepted_refund_minor,c.status AS cancellation_status,op.sent_at,op.created_at,op.attempt_count,op.purpose,op.authorization_id
@@ -25,7 +37,12 @@ async function lockContext(client: PoolClient, job: ClaimedJob) {
     LEFT JOIN refund_batches b ON op.type IN ('sandbox_refund','sandbox_refund_recheck') AND b.id=op.entity_id
     LEFT JOIN cancellation_requests c ON c.id=b.cancellation_request_id
     JOIN orders o ON o.id=CASE WHEN op.type IN ('sandbox_refund','sandbox_refund_recheck') THEN b.order_id ELSE op.entity_id END
-    JOIN payment_attempts p ON p.order_id=o.id WHERE op.id=$1 AND o.plan_id=$2 FOR UPDATE OF o`, [job.operation_id,job.plan_id]);
+    JOIN payment_attempts p ON p.order_id=o.id
+    LEFT JOIN budget_periods bp ON bp.id=o.budget_period_id
+    LEFT JOIN finance_accounts a ON a.id=bp.primary_account_id
+    WHERE op.id=$1 AND ((o.plan_id=$2 AND o.budget_period_id IS NULL)
+      OR (o.budget_period_id=$3 AND o.plan_id IS NULL)) FOR UPDATE OF o`,
+  [job.operation_id,job.plan_id,job.budget_period_id]);
   const ctx=result.rows[0];
   const lease=await client.query(`SELECT j.id FROM jobs j JOIN operations op ON op.id=j.operation_id
     WHERE j.id=$1 AND op.id=$2 AND j.state='leased' AND j.lease_version=$3 AND op.lease_version=$4
@@ -35,11 +52,20 @@ async function lockContext(client: PoolClient, job: ClaimedJob) {
   if(!ctx || ctx.environment!=='sandbox' || ctx.provider!=='alipay') throw new Error('渠道任务环境或对象不一致。');
   if(ctx.batch_id) {
     const batch=await client.query(`SELECT id FROM refund_batches WHERE id=$1 AND environment='sandbox' AND provider='alipay'
-      AND merchant_id=$2 FOR UPDATE`,[ctx.batch_id,ctx.merchant_id]);
+      AND (($2::uuid IS NOT NULL AND merchant_id=$2)
+        OR ($2::uuid IS NULL AND responsible_provider='alipay')) FOR UPDATE`,[ctx.batch_id,ctx.merchant_id]);
     if(!batch.rowCount) throw new Error('退款批次环境不一致。');
     await client.query('SELECT id FROM cancellation_requests WHERE id=$1 FOR UPDATE',[ctx.cancellation_id]);
   }
   return ctx;
+}
+
+async function appendScopeEvent(client: PoolClient, ctx: Context, actorId: string | null,
+  type: string, data: Record<string, unknown>) {
+  if (ctx.plan_id) return appendEvent(client, ctx.plan_id, actorId, type, data);
+  if (!ctx.budget_period_id) throw new Error('渠道结果缺少业务范围。');
+  await client.query(`INSERT INTO budget_events (owner_id,period_id,actor_id,type,data)
+    VALUES($1,$2,$3,$4,$5)`, [ctx.owner_id, ctx.budget_period_id, actorId, type, data]);
 }
 
 type Outcome = { state: 'succeeded' | 'unknown' | 'pending_review'; action: 'closed' | 'paid' | 'refunded' | 'waiting'; evidence: Record<string,unknown> };
@@ -54,7 +80,7 @@ export async function processChannelJob(job: ClaimedJob, adapter = channelAdapte
       if(!active.rowCount) {
         await client.query("UPDATE operations SET state='failed',lease_until=NULL,result=$2 WHERE id=$1",[job.operation_id,{reason:'受托查询授权已失效'}]);
         await client.query("UPDATE jobs SET state='complete',lease_until=NULL WHERE id=$1",[job.job_id]);
-        await appendEvent(client,ctx.plan_id,null,'query.authorization_expired',{operationId:job.operation_id});
+        await appendScopeEvent(client,ctx,null,'query.authorization_expired',{operationId:job.operation_id});
         return;
       }
     }
@@ -129,13 +155,32 @@ export async function processChannelJob(job: ClaimedJob, adapter = channelAdapte
       await client.query(`UPDATE operations SET state='succeeded',result=$2,channel_evidence=$2,lease_until=NULL
         WHERE id=(SELECT operation_id FROM refund_batches WHERE id=$1)`,[current.batch_id,outcome.evidence]);
       await client.query(`UPDATE jobs SET state='complete',lease_until=NULL WHERE operation_id=(SELECT operation_id FROM refund_batches WHERE id=$1)`,[current.batch_id]);
-
+      if (current.budget_period_id && current.account_source) {
+        await applyVerifiedMoneyEvent(client, current.owner_id, {
+          orderId: current.order_id, provider: 'alipay',
+          providerEventId: `ALIPAY_REFUND_${current.refund_number}`,
+          eventType: 'refund_verified', amountMinor: current.refund_amount!, currency: 'CNY',
+          occurredAt: new Date().toISOString(), verificationState: 'verified',
+          source: current.account_source,
+        });
+      }
     } else if(outcome.action==='paid' && current.payment_status!=='paid') {
       if(['closed','failed'].includes(current.payment_status) || current.refunded_minor>0) {
         outcome={state:'pending_review',action:'waiting',evidence:{...outcome.evidence,reason:'渠道付款观察与已关单或退款事实冲突'}};
       } else {
         await client.query("UPDATE orders SET payment_status='paid',status='fulfilling',updated_at=now() WHERE id=$1",[current.order_id]);
         await client.query("UPDATE payment_attempts SET status='paid',observed_at=now() WHERE order_id=$1",[current.order_id]);
+        if (current.budget_period_id && current.account_source) {
+          const channelId=typeof outcome.evidence.tradeNo==='string'
+            ? outcome.evidence.tradeNo : current.business_number;
+          await applyVerifiedMoneyEvent(client, current.owner_id, {
+            orderId: current.order_id, provider: 'alipay',
+            providerEventId: `ALIPAY_PAYMENT_${channelId}`,
+            eventType: 'payment_pending', amountMinor: current.amount_minor, currency: 'CNY',
+            occurredAt: new Date().toISOString(), verificationState: 'verified',
+            source: current.account_source,
+          });
+        }
       }
     } else if(outcome.action==='closed') {
       if(current.payment_status==='paid' || current.refunded_minor>0) {
@@ -149,9 +194,21 @@ export async function processChannelJob(job: ClaimedJob, adapter = channelAdapte
     const manual=(explicitQuery && outcome.state==='unknown') || outcome.state==='pending_review' || (outcome.state==='unknown' && Date.now()-current.created_at.getTime()>=30*60_000);
     if(manual) {
       outcome.state='pending_review';
-      await ensureManualTask(client,{dedupeKey:`channel:${job.operation_id}`,planId:current.plan_id,merchantId:current.merchant_id,
+      await ensureManualTask(client,{dedupeKey:`channel:${job.operation_id}`,
+        ...(current.plan_id && current.merchant_id
+          ? {planId:current.plan_id,merchantId:current.merchant_id}
+          : {budgetPeriodId:current.budget_period_id!,responsibleProvider:'alipay'}),
         orderId:current.order_id,cancellationRequestId:current.cancellation_id??undefined,refundBatchId:current.batch_id??undefined,
         operationId:job.operation_id,type:current.batch_id?'refund_recheck':'operation_recheck',reason:String(outcome.evidence.reason??'渠道结果等待超时'),nextAction:'核对原操作及原业务编号，不新增替代退款号。'});
+    }
+    if (outcome.state==='unknown' && current.budget_period_id && current.account_source) {
+      await applyVerifiedMoneyEvent(client, current.owner_id, {
+        orderId: current.order_id, provider: 'alipay',
+        providerEventId: `ALIPAY_UNKNOWN_${job.operation_id}_${job.operation_lease_version}`,
+        eventType: 'result_unknown', amountMinor: current.refund_amount ?? current.amount_minor,
+        currency: 'CNY', occurredAt: new Date().toISOString(),
+        verificationState: 'unknown', source: current.account_source,
+      });
     }
     if(current.batch_id && outcome.state!=='succeeded' && !explicitQuery) await client.query('UPDATE refund_batches SET status=$2,updated_at=now() WHERE id=$1',[current.batch_id,outcome.state]);
     const retry=outcome.state==='unknown';
@@ -163,7 +220,7 @@ export async function processChannelJob(job: ClaimedJob, adapter = channelAdapte
       await client.query("UPDATE manual_tasks SET state='resolved',resolved_at=now(),updated_at=now() WHERE refund_batch_id=$1 AND type='refund_recheck' AND state<>'resolved'",[current.batch_id]);
     }
     if(outcome.state==='succeeded') await client.query("UPDATE manual_tasks SET state='resolved',resolved_at=now(),updated_at=now() WHERE operation_id=$1 AND state<>'resolved'",[job.operation_id]);
-    await appendEvent(client,current.plan_id,null,`sandbox.${job.type}.${outcome.state}`,{operationId:job.operation_id,...outcome.evidence});
+    await appendScopeEvent(client,current,null,`sandbox.${job.type}.${outcome.state}`,{operationId:job.operation_id,...outcome.evidence});
   });
   return true;
 }

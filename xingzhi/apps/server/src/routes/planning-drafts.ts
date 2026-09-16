@@ -87,7 +87,7 @@ function draftResponse(data: PlanningDraftView) {
   };
 }
 
-async function createDraft(
+export async function createPlanningDraft(
   client: PoolClient,
   port: PlanningDraftPort,
   ownerId: string,
@@ -182,7 +182,7 @@ export async function registerPlanningDraftApi(app: FastifyInstance, options: {
       'POST /api/ai/planning-drafts',
       key,
       input,
-      async () => createDraft(client, port, request.authUser!.id, input),
+      async () => createPlanningDraft(client, port, request.authUser!.id, input),
     ));
     return reply.code(201).send(response);
   });
