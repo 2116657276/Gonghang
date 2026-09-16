@@ -251,7 +251,7 @@ $xzReview.data | Select-Object originalSavingsTargetMinor,currentSavingsTargetMi
 
 | 观察 | 首先检查 |
 | --- | --- |
-| API 打不开 | Docker/PostgreSQL 实际运行、`.env` 所指测试库、迁移 028、API 实际 `PORT`，不要只看 Docker Desktop 窗口已打开 |
+| API 打不开 | Docker/PostgreSQL 实际运行、`.env` 所指测试库、迁移登记已到 029、API 实际 `PORT`，不要只看 Docker Desktop 窗口已打开 |
 | 401／403 | 会话 Cookie、消费者角色、写请求 `Origin` 是否等于 `WEB_ORIGIN` |
 | `VALIDATION_ERROR` | 日期是否属于当前自然月、路径/正文 ID 是否一致、金额是正整数分、写请求是否带有效幂等键 |
 | `VERSION_CONFLICT` | 重新 GET 账户/周期及报价，取最新版本；旧评估不能自动重用 |
@@ -260,6 +260,6 @@ $xzReview.data | Select-Object originalSavingsTargetMinor,currentSavingsTargetMi
 | `FINANCE_SCOPE_REVOKED` | 已撤回账户不能重授新执行；只允许历史读取和既有订单善后 |
 | 支付/退款金额与页面不一致 | 分清用户估价、服务端报价、订单确认价、渠道回执、本人借记账户 posted 流水；只最后一种能改变确认现金 |
 
-交付给 B 前再核对：实际发布到远程 `main` 的代码版本、001→028 顺序迁移、B 可调用 A 内部函数的 import/类型、测试账号仅来自本地 `.env`、未把 `.env`/`.local-secrets` 送入 Git、A/B 相关测试在双方库可重复回滚、旧订单不被新 SQL 或初始化覆盖。A00 资金样例和 B00 报价是独立种子，不会随 PostgreSQL 数据或 Git 自动同步；本文只提供交接和手测规则，不替代版本发布，也不把本地工作区当成远程已发布状态。
+交付给 B 前再核对：实际发布到远程分支的代码版本、001→029 顺序迁移、B 可调用 A 内部函数的 import/类型、测试账号仅来自本地 `.env`、未把 `.env`/`.local-secrets` 送入 Git、A/B 相关测试在双方库可重复回滚、旧订单不被新 SQL 或初始化覆盖。A00 资金样例、B00 报价和隔离场景是独立种子，不会随 PostgreSQL 数据或 Git 自动同步；本文只提供交接和手测规则，不替代版本发布，也不把本地工作区当成远程已发布状态。
 
 代码入口：[A02 自然月预算](apps/server/src/domain/budget-periods.ts)、[A03 逐日核算](apps/server/src/domain/budget-cashflow.ts)、[A04 购买评估](apps/server/src/domain/purchase-assessment.ts)、[A05 最终准入](apps/server/src/domain/purchase-commit.ts)、[A06 资金事件](apps/server/src/domain/verified-money-event.ts)、[共同契约](packages/contracts/src/consumer-backend.ts)、[现状验证](docs/04-quality/verification.md)。
