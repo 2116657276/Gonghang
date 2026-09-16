@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { PoolClient } from 'pg';
 import { z, ZodError } from 'zod';
-import { financeAccountRevocationInput } from '@xingzhi/contracts';
+import { financeAccountRevocationInput, ledgerCategoryChangeInput } from '@xingzhi/contracts';
 import { config } from '../config.js';
 import { query, transaction } from '../db/client.js';
 import { AppError } from '../domain/errors.js';
@@ -11,6 +11,7 @@ import { runIdempotent } from '../domain/idempotency.js';
 
 type TransactionRunner = <T>(run: (client: PoolClient) => Promise<T>) => Promise<T>;
 const accountPath = z.object({ id: z.string().uuid() }).strict();
+const ledgerPath = z.object({ id: z.string().uuid() }).strict();
 
 function writeKey(request: FastifyRequest) {
   if (request.headers.origin !== config.webOrigin) {
@@ -102,6 +103,31 @@ export async function registerFinanceAccountApi(app: FastifyInstance, options: {
     return runTransaction((client) => runIdempotent(
       client, request.authUser!.id, `POST /api/finance/accounts/${id}/revocations`,
       key, input, () => revokeAccount(client, request.authUser!.id, id),
+    ));
+  });
+  app.patch('/api/finance/ledger/:id/category', async (request) => {
+    const { id } = ledgerPath.parse(request.params);
+    const input = ledgerCategoryChangeInput.parse(request.body);
+    const key = writeKey(request);
+    return runTransaction((client) => runIdempotent(
+      client, request.authUser!.id, `PATCH /api/finance/ledger/${id}/category`, key, input,
+      async () => {
+        const entry = (await client.query<{ originalCategory: string | null; accountStatus: string }>(`
+          SELECT entry.category AS "originalCategory",account.status AS "accountStatus"
+          FROM finance_ledger_entries entry JOIN finance_accounts account ON account.id=entry.account_id
+          WHERE entry.id=$1 AND entry.owner_id=$2 AND account.owner_id=$2 FOR UPDATE OF entry,account`,
+        [id, request.authUser!.id])).rows[0];
+        if (!entry) throw new AppError(404, 'RESOURCE_FORBIDDEN', '未找到本人流水。');
+        if (entry.accountStatus !== 'linked') {
+          throw new AppError(409, 'FINANCE_SCOPE_REVOKED', '账户授权已撤回，历史流水只能读取。');
+        }
+        const changed = (await client.query<{ updatedAt: Date }>(`INSERT INTO finance_ledger_category_overrides
+            (entry_id,owner_id,display_category) VALUES($1,$2,$3)
+          ON CONFLICT(entry_id) DO UPDATE SET display_category=EXCLUDED.display_category,updated_at=now()
+          RETURNING updated_at AS "updatedAt"`, [id, request.authUser!.id, input.category])).rows[0]!;
+        return { data: { entryId: id, originalCategory: entry.originalCategory,
+          displayCategory: input.category, updatedAt: changed.updatedAt.toISOString() }, meta: {} };
+      },
     ));
   });
 }

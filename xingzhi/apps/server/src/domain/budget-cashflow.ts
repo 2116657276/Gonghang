@@ -1,6 +1,7 @@
 import type { PoolClient } from 'pg';
 import type { PlanningDraftItem } from '@xingzhi/contracts';
 import { AppError } from './errors.js';
+import { expireStalePurchaseIntents } from './purchase-intent-lifecycle.js';
 import { loadFinanceAccountFacts } from './finance-facts.js';
 import {
   calculateDailyCashflow, unknownDailyCashflow, type CashflowEvent,
@@ -234,6 +235,7 @@ export async function forecastBudgetCashflow(client: PoolClient, ownerId: string
         || item.priority !== 'adjustable') {
         throw new AppError(409, 'ITEM_NOT_ORDERABLE', '只能调整本人尚未承诺的可调消费。');
       }
+      await expireStalePurchaseIntents(client, ownerId, item.id, now);
       const openIntent = await client.query(`SELECT 1 FROM purchase_intents
         WHERE owner_id=$1 AND budget_item_id=$2 AND status IN ('proposed','confirmed','ordered') LIMIT 1`,
       [ownerId, item.id]);

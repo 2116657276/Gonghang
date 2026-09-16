@@ -19,6 +19,7 @@ type OperationInput = {
   type: OperationType;
   entityId: string;
   authorizationId?: string;
+  aftercarePreviewId?: string;
   purpose: string;
 };
 
@@ -29,10 +30,11 @@ export async function createOperation(client: PoolClient, input: OperationInput)
   const operationId = randomUUID();
   await client.query(
     `INSERT INTO operations
-      (id, plan_id, budget_period_id, owner_id, type, entity_id, authorization_id, purpose)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      (id, plan_id, budget_period_id, owner_id, type, entity_id, authorization_id,
+        aftercare_preview_id,purpose)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8,$9)`,
     [operationId, input.planId ?? null, input.budgetPeriodId ?? null, input.ownerId,
-      input.type, input.entityId, input.authorizationId ?? null, input.purpose],
+      input.type, input.entityId, input.authorizationId ?? null,input.aftercarePreviewId ?? null,input.purpose],
   );
   return operationId;
 }

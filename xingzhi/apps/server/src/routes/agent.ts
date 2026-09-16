@@ -7,6 +7,7 @@ import { executeAgentRun, modelReady } from '../domain/agent-runtime.js';
 import {
   cancelConsumerAgentRun,
   executeConsumerAgentRun,
+  listConsumerAgentRuns,
   readConsumerAgentRun,
   startConsumerAgentRun,
 } from '../domain/consumer-agent-runtime.js';
@@ -16,6 +17,10 @@ const messageInput=z.object({message:z.string().trim().min(1).max(4000)}).strict
 const consumerMessageInput=z.object({
   message:z.string().trim().min(1).max(4000),
   periodId:z.string().uuid().nullable().default(null),
+}).strict();
+const consumerRunQuery=z.object({
+  periodId:z.union([z.string().uuid(),z.literal('null')]).optional(),
+  cursor:z.string().uuid().optional(),
 }).strict();
 
 export function registerAgentApi(app: FastifyInstance, stream?: StreamFn) {
@@ -59,6 +64,12 @@ export function registerAgentApi(app: FastifyInstance, stream?: StreamFn) {
   app.get('/api/ai/agent-runs/:id',async(request,reply)=>{
     const user=requireRole(request,reply,'consumer');if(!user)return;
     return {data:await readConsumerAgentRun(user,idInput.parse(request.params).id),meta:{}};
+  });
+  app.get('/api/ai/agent-runs',async(request,reply)=>{
+    const user=requireRole(request,reply,'consumer');if(!user)return;
+    const input=consumerRunQuery.parse(request.query);
+    return {data:await listConsumerAgentRuns(user,{periodId:input.periodId==='null'?null:input.periodId,
+      cursor:input.cursor}),meta:{}};
   });
   app.post('/api/ai/agent-runs/:id/cancel',async(request,reply)=>{
     const user=requireRole(request,reply,'consumer');if(!user)return;

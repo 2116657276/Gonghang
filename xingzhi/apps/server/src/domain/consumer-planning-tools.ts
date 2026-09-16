@@ -34,7 +34,6 @@ export function consumerPlanningAgentTools(handlers: Record<ToolName, ToolHandle
     catalogItemId: nullableUuid,
     suggestion,
   }, { additionalProperties: false });
-  const nullableVersion = Type.Union([Type.Integer({ minimum: 1 }), Type.Null()]);
   const definitions: Array<{
     name: ToolName;
     label: string;
@@ -45,7 +44,7 @@ export function consumerPlanningAgentTools(handlers: Record<ToolName, ToolHandle
       name: 'read_budget_basis' as const,
       label: '读取预算依据',
       description: '读取本人已授权周期的资金依据，只返回解释规划所需字段。',
-      parameters: Type.Object({ periodId: Type.String({ format: 'uuid' }) }, { additionalProperties: false }),
+      parameters: Type.Object({}, { additionalProperties: false }),
     },
     {
       name: 'search_offers' as const,
@@ -61,9 +60,6 @@ export function consumerPlanningAgentTools(handlers: Record<ToolName, ToolHandle
       label: '保存规划草稿',
       description: '保存严格校验的待确认草稿，不写预算项目、储蓄目标、订单、支付或退款。',
       parameters: Type.Object({
-        periodId: nullableUuid,
-        expectedFinancialVersion: nullableVersion,
-        expectedPeriodVersion: nullableVersion,
         items: Type.Array(draftItem, { minItems: 1, maxItems: 20 }),
       }, { additionalProperties: false }),
     },

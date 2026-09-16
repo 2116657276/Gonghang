@@ -17,6 +17,7 @@ type Context = {
   cancellation_id: string | null; batch_id: string | null; refund_number: string | null; refund_amount: number | null;
   batch_status: string | null; accepted_refund_minor: number | null; cancellation_status: string | null;
   sent_at: Date | null; created_at: Date; attempt_count: number; purpose: string; authorization_id: string | null;
+  aftercare_preview_id: string | null;
 };
 
 async function lockContext(client: PoolClient, job: ClaimedJob) {
@@ -32,7 +33,8 @@ async function lockContext(client: PoolClient, job: ClaimedJob) {
     o.merchant_id,a.source AS account_source,o.amount_minor,o.refunded_minor,
     o.payment_status,p.provider_status,p.business_number,o.environment,o.provider,c.id AS cancellation_id,b.id AS batch_id,
     b.business_number AS refund_number,b.amount_minor AS refund_amount,b.status AS batch_status,
-    c.accepted_refund_minor,c.status AS cancellation_status,op.sent_at,op.created_at,op.attempt_count,op.purpose,op.authorization_id
+    c.accepted_refund_minor,c.status AS cancellation_status,op.sent_at,op.created_at,op.attempt_count,op.purpose,op.authorization_id,
+    op.aftercare_preview_id
     FROM operations op
     LEFT JOIN refund_batches b ON op.type IN ('sandbox_refund','sandbox_refund_recheck') AND b.id=op.entity_id
     LEFT JOIN cancellation_requests c ON c.id=b.cancellation_request_id
@@ -85,9 +87,14 @@ export async function processChannelJob(job: ClaimedJob, adapter = channelAdapte
       }
     }
     if(job.type==='sandbox_close' && !ctx.sent_at) {
-      const auth=await client.query(`SELECT a.id FROM authorizations a JOIN operations op ON op.authorization_id=a.id
-        WHERE op.id=$1 AND a.type='aftercare' AND a.status='active' AND a.expires_at>now()
-          AND (a.scope->'orderIds') ? $2`,[job.operation_id,ctx.order_id]);
+      const auth=await client.query(`SELECT 1 WHERE EXISTS (
+          SELECT 1 FROM authorizations a JOIN operations op ON op.authorization_id=a.id
+          WHERE op.id=$1 AND a.type='aftercare' AND a.status='active' AND a.expires_at>now()
+            AND (a.scope->'orderIds') ? $2::text)
+        OR EXISTS (SELECT 1 FROM consumer_aftercare_previews preview
+          WHERE preview.id=$3::uuid AND preview.owner_id=$4::uuid AND preview.order_id=$2::uuid
+            AND preview.action='close' AND preview.status='accepted')`,
+      [job.operation_id,ctx.order_id,ctx.aftercare_preview_id,ctx.owner_id]);
       if(!auth.rowCount) return {...ctx,blocked:true};
     }
     if(job.type==='sandbox_refund' && (!['approved','refund_processing'].includes(ctx.cancellation_status ?? '') || ctx.payment_status!=='paid')) {

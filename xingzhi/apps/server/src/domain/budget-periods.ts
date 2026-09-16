@@ -5,6 +5,7 @@ import {
   type BudgetItemMutationResult, type BudgetPeriodCreateInput, type BudgetPeriodActivationInput,
 } from '@xingzhi/contracts';
 import { AppError } from './errors.js';
+import { expireStalePurchaseIntents } from './purchase-intent-lifecycle.js';
 import { loadFinanceAccountFacts } from './finance-facts.js';
 import { forecastBudgetCashflow } from './budget-cashflow.js';
 
@@ -103,6 +104,7 @@ function correctMonth(period: Period, plannedOn: string) {
   }
 }
 async function noOpenIntent(client: PoolClient, ownerId: string, itemId: string) {
+  await expireStalePurchaseIntents(client, ownerId, itemId);
   const found = await client.query(`SELECT 1 FROM purchase_intents WHERE owner_id=$1 AND budget_item_id=$2
     AND status IN ('proposed','confirmed','ordered') LIMIT 1`, [ownerId, itemId]);
   if (found.rowCount) throw new AppError(409, 'ITEM_NOT_ORDERABLE', '已有购买意图，不能直接改写或取消该项目。');

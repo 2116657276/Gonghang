@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { Agent, type StreamFn } from '@earendil-works/pi-agent-core';
 import type { Model } from '@earendil-works/pi-ai';
 import { streamSimple } from '@earendil-works/pi-ai/api/openai-completions';
-import { offerSearchInput, planningDraftInput } from '@xingzhi/contracts';
+import { offerSearchInput, planningDraftInput, planningDraftItem } from '@xingzhi/contracts';
 import { z } from 'zod';
 import type { AuthUser } from '../auth/session.js';
 import { query, transaction } from '../db/client.js';
@@ -82,8 +82,36 @@ export async function readConsumerAgentRun(user: AuthUser, runId: string) {
     FROM agent_runs WHERE id=$1 AND owner_id=$2 AND workflow='consumer_planning'`,
   [runId, user.id])).rows[0];
   if (!row) notFound('未找到规划助手运行。');
+  const artifacts = (await query<{ draftId: string }>(`SELECT draft_id AS "draftId"
+    FROM consumer_agent_artifacts WHERE run_id=$1 AND owner_id=$2 ORDER BY created_at,draft_id`,
+  [runId, user.id])).rows.map((item) => ({ type: 'planning_draft' as const, draftId: item.draftId }));
   return { ...row, createdAt: row.createdAt.toISOString(),
-    finishedAt: row.finishedAt?.toISOString() ?? null };
+    finishedAt: row.finishedAt?.toISOString() ?? null, artifacts };
+}
+
+export async function listConsumerAgentRuns(user: AuthUser, input: {
+  periodId: string | null | undefined; cursor?: string;
+}) {
+  const cursor = input.cursor ? (await query<{ createdAt: Date; id: string }>(`SELECT created_at AS "createdAt",id
+    FROM agent_runs WHERE id=$1 AND owner_id=$2 AND workflow='consumer_planning'`,
+  [input.cursor, user.id])).rows[0] : undefined;
+  if (input.cursor && !cursor) throw new AppError(400, 'VALIDATION_ERROR', '运行列表游标无效。');
+  const rows = (await query<{
+    id: string; budgetPeriodId: string | null; state: string; errorCode: string | null;
+    createdAt: Date; finishedAt: Date | null;
+  }>(`SELECT id,budget_period_id AS "budgetPeriodId",state,error_code AS "errorCode",
+      created_at AS "createdAt",finished_at AS "finishedAt"
+    FROM agent_runs WHERE owner_id=$1 AND workflow='consumer_planning'
+      AND ($2::boolean OR ($3::uuid IS NULL AND budget_period_id IS NULL) OR budget_period_id=$3)
+      AND ($4::timestamptz IS NULL OR (created_at,id)<($4,$5::uuid))
+    ORDER BY created_at DESC,id DESC LIMIT 21`, [user.id, input.periodId === undefined,
+    input.periodId ?? null, cursor?.createdAt ?? null, cursor?.id ?? null])).rows;
+  const page = rows.slice(0, 20);
+  return {
+    items: page.map((row) => ({ ...row, createdAt: row.createdAt.toISOString(),
+      finishedAt: row.finishedAt?.toISOString() ?? null })),
+    nextCursor: rows.length > 20 ? page.at(-1)!.id : null,
+  };
 }
 
 export async function cancelConsumerAgentRun(user: AuthUser, runId: string) {
@@ -107,6 +135,7 @@ export async function executeConsumerAgentRun(runId: string, user: AuthUser,
   let pendingCall: string | undefined;
   let settlement = Promise.resolve();
   let modelFailed = false;
+  let readBasis: { financialVersion: number; periodVersion: number } | null = null;
   const abort = new AbortController();
   const combined = AbortSignal.any([signal, abort.signal, AbortSignal.timeout(120_000)]);
   const ensureActive = async () => { combined.throwIfAborted(); await assertConsumerRunActive(runId); };
@@ -126,10 +155,13 @@ export async function executeConsumerAgentRun(runId: string, user: AuthUser,
     read_budget_basis: async (raw) => {
       await ensureActive();
       if (++toolCalls > 20) throw new Error('工具次数达到上限。');
-      const requested = z.object({ periodId: z.string().uuid() }).strict().parse(raw).periodId;
-      if (!periodId || requested !== periodId) throw new AppError(403, 'RESOURCE_FORBIDDEN', '只能读取本次运行绑定的预算周期。');
+      z.object({}).strict().parse(raw);
+      if (!periodId) throw new AppError(409, 'FINANCE_BASIS_UNKNOWN', '本次运行尚未绑定预算周期。');
       await query('UPDATE agent_runs SET tool_calls=$2 WHERE id=$1', [runId, toolCalls]);
-      return transaction((client) => readBudgetPeriod(client, user.id, periodId));
+      const result = await transaction((client) => readBudgetPeriod(client, user.id, periodId));
+      readBasis = { financialVersion: result.basis.financialVersion,
+        periodVersion: result.basis.periodVersion };
+      return result;
     },
     search_offers: async (raw) => {
       await ensureActive();
@@ -149,16 +181,25 @@ export async function executeConsumerAgentRun(runId: string, user: AuthUser,
     save_planning_draft: async (raw) => {
       await ensureActive();
       if (++toolCalls > 20) throw new Error('工具次数达到上限。');
-      const input = planningDraftInput.parse(raw);
-      if (input.periodId !== periodId) {
-        throw new AppError(409, 'CONFIRMATION_SCOPE_MISMATCH', '草稿范围必须与本次运行一致。');
-      }
+      const payload = z.object({ items: z.array(planningDraftItem).min(1).max(20) }).strict().parse(raw);
+      if (periodId && !readBasis) throw new AppError(409, 'FINANCE_BASIS_UNKNOWN', '保存周期草稿前必须读取本次绑定的资金依据。');
+      const input = planningDraftInput.parse({ periodId,
+        expectedFinancialVersion: readBasis?.financialVersion ?? null,
+        expectedPeriodVersion: readBasis?.periodVersion ?? null, items: payload.items });
       await query('UPDATE agent_runs SET tool_calls=$2 WHERE id=$1', [runId, toolCalls]);
-      return transaction((client) => createPlanningDraft(client, budgetPlanningDraftPort, user.id, input));
+      return transaction(async (client) => {
+        const draft = await createPlanningDraft(client, budgetPlanningDraftPort, user.id, input);
+        await client.query(`INSERT INTO consumer_agent_artifacts(run_id,draft_id,owner_id)
+          VALUES($1,$2,$3) ON CONFLICT (draft_id) DO NOTHING`,
+        [runId, draft.data.draftId, user.id]);
+        return draft;
+      });
     },
   });
+  const shanghaiDate = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai',
+    year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
   const agent = new Agent({ initialState: { model, systemPrompt:
-    `你是行止银行消费规划助手。只依据工具返回的本人预算和银行平台登记商品回答。
+    `你是行止银行消费规划助手。当前上海日期为 ${shanghaiDate}；本次运行${periodId ? '已由服务端绑定预算周期' : '未绑定预算周期'}。只依据工具返回的本人预算和银行平台登记商品回答。
 用户明确给出的需求可保存为待确认草稿；缺失日期、金额或优先级必须保留为空，不得自行补写。
 你可以读取预算、搜索登记商品、保存非执行草稿。你不能选择商品、修改正式预算或储蓄目标、确认购买、创建订单、支付、取消或退款。
 金额字段以分计，展示为元时除以100。不要展示内部标识、密钥、模型推理过程或不必要的逐笔流水。`,

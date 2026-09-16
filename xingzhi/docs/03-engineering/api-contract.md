@@ -6,7 +6,7 @@
 | --- | --- |
 | 文档编号 | XZ-API |
 | 更新日期 | 2026-09-16 |
-| 状态 | 001—028、A00—A06 与 B00—B07 已进入当前代码基线；M1 原领域主链已有验证，补充收口与 HTTP 验收待完成，通过后进入 M2/M3 |
+| 状态 | 001—029、A00—A06、B00—B07 与 M1 补充收口已进入当前代码基线；HTTP 与目标回归通过，M1 后端契约冻结并进入 M2 |
 | 适用范围 | 账户范围、轻量流水、30 天规划、登记目录、消费执行、计划变化和支付适配 |
 | 实施顺序 | M1 后端迁移与接口 → M2 前端统一工作区 → M3 集中验收 |
 
@@ -158,11 +158,17 @@ B00 的 `GET /api/offers`、`GET /api/offers/:id/quote` 以及 B01 的预算项�
 
 `POST /api/purchase-intents` 正文为 `{ periodId, budgetItemId, quoteId, assessmentId, expectedFinancialVersion, expectedPeriodVersion, expectedQuoteVersion }`。接口只接受本人消费者、同源请求和 `Idempotency-Key`；它复用已经持久化的 A04 评估，不再次调用 preview。创建前核对账户仍授权、周期 active、项目仍 planned、商品和报价仍可购买、评估属于同一项目与报价、三个版本一致、估价与报价未变化、评估未过期且状态为 `allowed`。
 
+`POST /api/purchase-intents/:id/rejections` 正文为 `{ expectedStatus: "proposed" }`，要求本人消费者、同源请求和 `Idempotency-Key`。有效意图转为 `rejected`，已经到期的意图转为 `expired`；两者均保留原评估与报价证据并释放项目的编辑、取消和重新评估入口。确认与放弃采用一致锁顺序并串行化，只有一个状态迁移成功；`confirmed/ordered` 必须转入原订单善后。
+
+到期 `proposed` 意图也会由后续购买评估、项目编辑/取消、意外调整评估等写请求在业务事务内惰性转换为 `expired` 并写入 `purchase_intent_expired` 预算事件；没有定时扫描，只读 GET 不触发转换。惰性释放不推进 financialVersion/periodVersion，也不释放已建单承诺。
+
 成功时仅创建 `status=proposed` 的购买意图和 `purchase_intent_proposed` 预算事件，不确认、不建单、不触发付款。响应 `{ data, meta }` 中 `data` 包含意图／周期／项目／报价／评估标识，用户估价、渠道报价、差额、资金状态、受影响日期、原因、商品规则摘要、到期时间及 `confirmationRequired=true`；`meta` 返回三个版本和到期时间。`needs_adjustment`、`blocked`、`unknown` 分别拒绝为 `SAVINGS_TARGET_AT_RISK`、`INSUFFICIENT_FUNDS`、`FINANCE_BASIS_UNKNOWN`。同一项目的开放意图由项目锁和数据库唯一约束共同限制。B03 成功仍不等于购买授权，必须继续调用 B04 本人确认。
 
 ### 2.9 B04 本人确认、订单和支付交接
 
 `POST /api/purchase-intents/:id/confirm` 正文为 `{ acceptedAmountMinor, expectedFinancialVersion, expectedPeriodVersion, expectedQuoteVersion, confirmedByUser: true }`，要求本人消费者、同源请求和 `Idempotency-Key`。接口在唯一数据库事务中调用 A05，重新读取账户、同账户周期、项目、报价、评估和意图；只有确认金额等于当前报价且所有依据仍有效时，才创建一笔新消费者订单并把预算项目置为 `committed`。响应 `{ data, meta }` 返回 `ordered` 意图、新订单及最新版本。`GET /api/orders/:id` 读取本人新订单。
+
+`POST /api/orders/:id/aftercare-previews` 与 `POST /api/orders/:id/aftercare-confirmations` 是本人新订单的独立善后入口。预览正文 `{ action: "close" | "cancel" }`，确认正文 `{ previewId, acceptedFeeMinor, acceptedRefundMinor, confirmedByUser: true }`；两者均要求同源和幂等键。确认重读原单状态与规则后复用现有 operation/job、关单和退款机制。账户撤回或当前资金不足不阻止既有订单善后，也不恢复新购买权限；`refund_requested`、渠道成功和银行 posted 仍是三个不同事实阶段。
 
 `POST /api/orders/:id/payment-handoffs` 复用既有路径并按订单形状分流。simulation 创建固定业务号的 `simulate_payment` 操作和任务，无需用户动作；sandbox 返回支付宝官方收银台地址并要求用户自行确认付款。重复幂等请求或已有操作复用原操作，不新建订单或业务号。账户在首次交接前撤回时返回 `FINANCE_SCOPE_REVOKED`。
 
@@ -182,7 +188,7 @@ Worker 的 operation/job 可绑定旧 `plan_id` 或新 `budget_period_id`，两�
 
 `GET /api/budget-periods/:id/events?cursor=0` 仅本人可读，返回 `{ data: { events }, meta: { nextCursor } }`，每页最多 100 条。事件只保存可追溯业务摘要，不保存密钥、原始支付凭据或模型思维链。
 
-新消费者自然语言入口为 `POST /api/ai/agent-runs`，正文 `{ message, periodId }`，其中 `periodId` 可为 null，以支持未选账户时保存需求草稿；写请求要求同源和 `Idempotency-Key`。读取和取消分别使用 `GET /api/ai/agent-runs/:id`、`POST /api/ai/agent-runs/:id/cancel`。该运行只注册 `read_budget_basis`、`search_offers`、`save_planning_draft`，不能选择商品、修改正式预算或目标、确认购买、建单、支付、取消或退款。旧 `/api/plans/:id/agent-runs` 继续服务历史计划，不与新入口混用。
+新消费者自然语言入口为 `POST /api/ai/agent-runs`，正文 `{ message, periodId }`，其中 `periodId` 可为 null，以支持未选账户时保存需求草稿；写请求要求同源和 `Idempotency-Key`。详情、列表和取消分别使用 `GET /api/ai/agent-runs/:id`、`GET /api/ai/agent-runs?periodId=&cursor=`、`POST /api/ai/agent-runs/:id/cancel`；详情返回 `artifacts`，列表省略 periodId 时读取本人全部运行，`periodId=null` 只读取无周期运行。刷新读取不重新调用模型。该运行只注册 `read_budget_basis`、`search_offers`、`save_planning_draft`，不能选择商品、修改正式预算或目标、确认购买、建单、支付、取消或退款。旧 `/api/plans/:id/agent-runs` 继续服务历史计划，不与新入口混用。
 
 ## 三、早期 M1 财务接口设计目标
 
@@ -223,11 +229,11 @@ Worker 的 operation/job 可绑定旧 `plan_id` 或新 `budget_period_id`，两�
 
 ### 3.2 轻量流水和还款安排
 
-**2026-09-16 收口补充：** 当前 `GET /api/finance/accounts` 已返回 `ledger` 与 `obligations`；M1 收口复用该入口，下面独立 GET 不作为必需新增接口。分类 PATCH 按 [A/B 总方案第 11 节](../../行止_AB后端开发总方案_现状接口数据库任务.md#11-m1-后端收口进入-m2-前的补充任务) 实施为用户展示覆盖，保留原始 category 和资金事实，不直接 UPDATE 已入账流水。意图退出、新订单独立善后、Agent 产物/读取等新增路径也以该节为待实施契约；旧路径说明不得冒充这些接口已注册。
+**2026-09-16 收口补充：** 当前 `GET /api/finance/accounts` 已返回 `ledger` 与 `obligations`，流水同时提供 `originalCategory` 与 `displayCategory`；M1 复用该入口，下面独立 GET 不作为必需新增接口。分类 PATCH 使用独立展示覆盖，不直接 UPDATE 已入账流水。意图退出、新订单独立善后和 Agent 产物/读取路径均已注册并纳入 M2 冻结契约。
 
 `GET /api/finance/ledger?accountId=&from=&to=&cursor=`（设计目标，当前未注册）返回本人账户已经保存的流水，字段包括 `id`、`accountId`、`direction`、`amountMinor`、`occurredAt`、`postedAt`、`status`、`category`、`merchantName`、`source`、`sourceRef`、`orderId` 和 `dedupeKey`。读取按账户归属和时间范围过滤，不能读取别人的账户；账户撤回后只允许读取本地历史记录，不触发外部同步。
 
-`PATCH /api/finance/ledger/:id/category`（M1 收口待实施，当前未注册）请求 `{ "category": "food" }`，带幂等键。仅本人可修改仍在授权范围内流水的 displayCategory，响应保留原始 category；展示覆盖独立保存，金额、账户、来源、时间、入账状态、原始分类和订单关联均不可修改。分类不影响资金计算或资金版本，无需使购买确认失效。
+`PATCH /api/finance/ledger/:id/category`（当前已实现）请求 `{ "category": "food" }`，带同源和幂等键。仅本人可修改仍在授权范围内流水的 displayCategory，响应保留原始 category；展示覆盖独立保存，金额、账户、来源、时间、入账状态、原始分类和订单关联均不可修改。分类不影响资金计算或资金版本，无需使购买确认失效。
 
 首版不开放手工新增已入账流水接口。用户报告“新增 400 元必要支出”时，保存为资金规划中的必要支出安排，并标为用户输入；如果确实已由测试账户扣款，使用受控 Demo 数据入口产生带来源的流水并关联原安排，不能同时保留同一笔未履行支出。真实银行流水导入不由普通客户端或模型完成。
 
@@ -392,13 +398,13 @@ Worker 的 operation/job 可绑定旧 `plan_id` 或新 `budget_period_id`，两�
 
 ## 六、迁移、兼容和阶段门槛
 
-M1 已按 013—028 的增量结构落入当前代码基线；A00—A06、B00—B07 已有实现与 simulation 领域检查记录，补充收口待完成。已有 `/api/catalog`、`/api/plans`、购买、变更和支付路径继续保留，新消费者路径按预算周期和购买意图分流。
+M1 已按 013—029 的增量结构落入当前代码基线；A00—A06、B00—B07 与 M1 补充收口已有实现，simulation 领域检查、消费者 HTTP 连续验收和 74/74 目标套件均已在隔离数据库登记通过。已有 `/api/catalog`、`/api/plans`、购买、变更和支付路径继续保留，新消费者路径按预算周期和购买意图分流。
 
 迁移后，旧 `plans` 回填 `cashflowState=legacy` 且 `cashflowPlanId=NULL`；它们只能完成迁移前已受理的订单、关单、退款和核验。新空状态计划明确写 `cashflowState=draft`，可以没有账户规划但只能编辑；关联 active 规划后才允许新购买确认和建单。旧订单不得搬到新规划，不能通过旧路径绕过资金准入。
 
 | 阶段 | API 工作 | 状态 |
 | --- | --- | --- |
-| M1 后端 | A00—A06、B00—B07、001—028 和统一 API 证据 | 原领域检查通过；收口与 HTTP 连续验收待完成 |
+| M1 后端 | A00—A06、B00—B07、001—029、补充收口和统一 API 证据 | 集中验收通过（HTTP 连续链、74/74 套件、真实模型代表性检查），M2 契约冻结 |
 | M2 前端 | 基于已有快照和新规划响应统一空状态、记账、规划、候选、确认、支付与变化调整 | 未开始 |
 | M3 集中验收 | 一次性核对权限、余额基准、快照覆盖、去重、跨计划、模拟／沙箱隔离和完整演示 | 未开始 |
 

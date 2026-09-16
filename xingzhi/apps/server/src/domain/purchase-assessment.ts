@@ -4,6 +4,7 @@ import { fundingAssessment, type AssessPurchaseInput, type FundingAssessment } f
 import { AppError } from './errors.js';
 import { forecastBudgetCashflow } from './budget-cashflow.js';
 import type { PlanningOptionChange } from './budget-cashflow.js';
+import { expireStalePurchaseIntents } from './purchase-intent-lifecycle.js';
 
 export type PurchaseItemRow = {
   id: string; accountId: string; periodId: string; kind: string; status: string;
@@ -38,6 +39,7 @@ export async function readPurchaseItem(client: PoolClient, ownerId: string, peri
   if (item.kind !== 'planned_spend' || item.status !== 'planned') {
     throw new AppError(409, 'ITEM_NOT_ORDERABLE', '只有尚未下单的计划支出可购买。');
   }
+  await expireStalePurchaseIntents(client, ownerId, budgetItemId);
   const existing = await client.query(`SELECT 1 FROM purchase_intents
     WHERE budget_item_id=$1 AND owner_id=$2 AND status IN ('proposed','confirmed','ordered')
       AND ($3::uuid IS NULL OR id<>$3::uuid) LIMIT 1`,

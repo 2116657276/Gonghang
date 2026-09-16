@@ -146,8 +146,8 @@ async function processClose(client: PoolClient, job: ClaimedJob) {
       'SELECT id, close_simulation_mode, payment_status FROM orders WHERE id = $1 FOR UPDATE', [job.entity_id],
     );
     const order = result.rows[0];
-    if (!order || order.payment_status !== 'pending') {
-      return { state: 'failed' as const, result: { reason: '仅待付款订单可按此模拟关单。' }, eventType: 'simulation.close_skipped' };
+    if (!order || !['pending', 'unknown'].includes(order.payment_status)) {
+      return { state: 'failed' as const, result: { reason: '仅待付款或结果未知订单可按原号核对后模拟关单。' }, eventType: 'simulation.close_skipped' };
     }
     if (order.close_simulation_mode !== 'SUCCESS') {
       const pending = order.close_simulation_mode === 'PENDING';

@@ -166,6 +166,30 @@ export const purchaseIntentConfirmInput = z.object({
   confirmedByUser: z.literal(true),
 }).strict();
 
+export const purchaseIntentRejectInput = z.object({
+  expectedStatus: z.literal('proposed'),
+}).strict();
+
+export const aftercarePreviewInput = z.object({
+  action: z.enum(['close', 'cancel']),
+}).strict();
+
+export const aftercareConfirmationInput = z.object({
+  previewId: uuid,
+  acceptedFeeMinor: nonnegativeMinor,
+  acceptedRefundMinor: nonnegativeMinor,
+  confirmedByUser: z.literal(true),
+}).strict();
+
+export const ledgerDisplayCategories = [
+  'food', 'housing', 'transport', 'utilities', 'health', 'education', 'shopping',
+  'entertainment', 'repayment', 'income', 'refund', 'purchase', 'unexpected', 'other',
+] as const;
+
+export const ledgerCategoryChangeInput = z.object({
+  category: z.enum(ledgerDisplayCategories),
+}).strict();
+
 export const purchaseIntentView = z.object({
   purchaseIntentId: uuid,
   periodId: uuid,
@@ -427,6 +451,10 @@ export type AssessPurchaseInput = z.infer<typeof assessPurchaseInput>;
 export type FundingAssessment = z.infer<typeof fundingAssessment>;
 export type PurchaseIntentCreateInput = z.infer<typeof purchaseIntentCreateInput>;
 export type PurchaseIntentConfirmInput = z.infer<typeof purchaseIntentConfirmInput>;
+export type PurchaseIntentRejectInput = z.infer<typeof purchaseIntentRejectInput>;
+export type AftercarePreviewInput = z.infer<typeof aftercarePreviewInput>;
+export type AftercareConfirmationInput = z.infer<typeof aftercareConfirmationInput>;
+export type LedgerCategoryChangeInput = z.infer<typeof ledgerCategoryChangeInput>;
 export type PurchaseIntentView = z.infer<typeof purchaseIntentView>;
 export type ConsumerOrderView = z.infer<typeof consumerOrderView>;
 export type PurchaseIntentConfirmationView = z.infer<typeof purchaseIntentConfirmationView>;

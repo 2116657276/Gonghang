@@ -2,13 +2,14 @@ import { randomUUID } from 'node:crypto';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { ZodError } from 'zod';
 import { z } from 'zod';
-import { purchaseIntentConfirmInput, purchaseIntentCreateInput } from '@xingzhi/contracts';
+import { purchaseIntentConfirmInput, purchaseIntentCreateInput, purchaseIntentRejectInput } from '@xingzhi/contracts';
 import { config } from '../config.js';
 import { transaction } from '../db/client.js';
 import { AppError } from '../domain/errors.js';
 import { runIdempotent } from '../domain/idempotency.js';
 import { createPurchaseIntent } from '../domain/purchase-intents.js';
 import { confirmPurchaseIntent, readConsumerOrder } from '../domain/consumer-orders.js';
+import { rejectPurchaseIntent } from '../domain/purchase-intent-lifecycle.js';
 
 const intentPath = z.object({ id: z.string().uuid() }).strict();
 
@@ -67,6 +68,15 @@ export async function registerPurchaseIntentApi(app: FastifyInstance) {
       },
     ));
     return reply.code(201).send(response);
+  });
+  app.post('/api/purchase-intents/:id/rejections', async (request) => {
+    const { id } = intentPath.parse(request.params);
+    const input = purchaseIntentRejectInput.parse(request.body);
+    const key = writeKey(request);
+    return transaction((client) => runIdempotent(
+      client, request.authUser!.id, `POST /api/purchase-intents/${id}/rejections`, key, input,
+      async () => ({ data: await rejectPurchaseIntent(client, request.authUser!.id, id), meta: {} }),
+    ));
   });
   app.get('/api/orders/:id', async (request) => {
     const { id } = intentPath.parse(request.params);

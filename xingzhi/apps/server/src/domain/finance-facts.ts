@@ -19,7 +19,7 @@ type SnapshotRow = {
 type LedgerRow = {
   id: string; direction: 'inflow' | 'outflow'; amountMinor: number; occurredAt: Date;
   postedAt: Date | null; status: 'pending' | 'posted' | 'reversed';
-  source: string; category: string | null; orderId: string | null;
+  source: string; category: string | null; displayCategory: string | null; orderId: string | null;
 };
 type ObligationRow = {
   id: string; obligationType: 'credit_bill' | 'loan_repayment' | 'installment';
@@ -124,10 +124,13 @@ export async function loadFinanceAccountFacts(db: FinanceDb, ownerId: string, ac
     captured_at AS "capturedAt",fact_status AS "factStatus",source
     FROM finance_account_snapshots WHERE account_id=$1
     ORDER BY as_of DESC,captured_at DESC,id DESC LIMIT 1`, [accountId])).rows[0];
-  const ledger = (await db.query<LedgerRow>(`SELECT id,direction,amount_minor AS "amountMinor",
-    occurred_at AS "occurredAt",posted_at AS "postedAt",status,source,category,
-    order_id AS "orderId" FROM finance_ledger_entries
-    WHERE account_id=$1 AND owner_id=$2 ORDER BY occurred_at DESC,id DESC`, [accountId, ownerId])).rows;
+  const ledger = (await db.query<LedgerRow>(`SELECT entry.id,entry.direction,entry.amount_minor AS "amountMinor",
+    entry.occurred_at AS "occurredAt",entry.posted_at AS "postedAt",entry.status,entry.source,
+    entry.category,COALESCE(override.display_category,entry.category) AS "displayCategory",
+    entry.order_id AS "orderId" FROM finance_ledger_entries entry
+    LEFT JOIN finance_ledger_category_overrides override
+      ON override.entry_id=entry.id AND override.owner_id=entry.owner_id
+    WHERE entry.account_id=$1 AND entry.owner_id=$2 ORDER BY entry.occurred_at DESC,entry.id DESC`, [accountId, ownerId])).rows;
   const obligationRows = (await db.query<ObligationRow>(`SELECT o.id,o.obligation_type AS "obligationType",
     o.liability_account_id AS "liabilityAccountId", liability.account_type AS "liabilityAccountType",
     o.repayment_account_id AS "repaymentAccountId", repayment.account_type AS "repaymentAccountType",
@@ -214,7 +217,8 @@ export async function loadFinanceAccountFacts(db: FinanceDb, ownerId: string, ac
     ledger: ledger.map((entry) => ({
       entryId: entry.id, direction: entry.direction, amountMinor: safeAmount(entry.amountMinor)!,
       occurredAt: entry.occurredAt.toISOString(), postedAt: dateTime(entry.postedAt),
-      status: entry.status, source: entry.source, category: entry.category, orderId: entry.orderId,
+      status: entry.status, source: entry.source, category: entry.category,
+      originalCategory: entry.category, displayCategory: entry.displayCategory, orderId: entry.orderId,
     })),
     obligations: account.accountType === 'debit'
       ? obligations : { items: obligationRows.filter((row) => row.liabilityAccountId === accountId).map((row) => ({
