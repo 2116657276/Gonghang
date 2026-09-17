@@ -41,7 +41,7 @@
 
 1. 确认 B 已从远程 `main` 拿到同一版本的所有 A/B **代码及 001—029 迁移文件**。不要只把本机数据库状态当交接；每人分别确认自己的 PostgreSQL 迁移登记已到 029，再按需运行 A00/B00 独立样例入口。
 2. 使用**独立本地测试库**。新库先完成迁移和通用测试用户初始化；已有历史/沙盒业务库不要重新运行旧 `db:seed`，因为它会更新旧 A/B/C/D 目录。不要清空或强制覆盖现有数据库。
-3. `.env` 仅在本机配置 `DATABASE_URL`、`PORT`、`WEB_ORIGIN`、`SEED_DEMO_PASSWORD`；不要提交、截图公开或把账户/支付密钥放进请求示例。当前本机 `PORT=8877`、`WEB_ORIGIN=http://localhost:5173`、`PAYMENT_MODE=simulation`；队友若不同，以各自 `.env` 为准。
+3. `.env` 仅在本机配置 `DATABASE_URL`、`PORT`、`WEB_ORIGIN`、`SEED_DEMO_PASSWORD`；不要提交、截图公开或把账户/支付密钥放进请求示例。代码默认 `PORT=8787`（与 README 和前端 vite 代理一致），`WEB_ORIGIN=http://localhost:5173`、`PAYMENT_MODE=simulation`；本机 `.env` 可覆盖端口（历史手测曾用 8877），队友若不同，以各自 `.env` 为准，但改端口须同步 vite 代理目标。
 4. PostgreSQL/Docker Desktop 应实际就绪；API 可访问。可从仓库根目录启动 `pnpm --filter @xingzhi/server dev`；要同时看旧 Web/Worker 可用 `pnpm dev`。新消费者前端尚未接齐这些 API，下面的步骤使用 PowerShell 或同等 HTTP 客户端，不以旧网页按钮作为验收依据。
 5. Demo 样本的快照只在首次初始化时写入；超过 24 小时会因过期而变成 `unknown`。**重新运行种子不会刷新快照，也不应通过改库伪造余额来通过测试。** 若 `cashBasis.dataStatus` 不是 `observed`，标记“资金依据待刷新”，只做只读/错误边界；显式创建新隔离场景已经实现：`pnpm --filter @xingzhi/server db:seed:consumer-scenario <场景标识> <服务日期>`（详见 A/B 总方案第 11 节收口 5 与[运行边界](docs/04-quality/operations.md)），不能把重复运行旧种子当成刷新。
 
@@ -60,7 +60,7 @@ pnpm --filter @xingzhi/server db:seed:consumer-finance
 以下代码块适用 **Windows PowerShell**，都在新隔离库测试。先启动 API。为了不把密码留在命令历史，交互输入本机测试密码；密码只用于这次会话。
 
 ```powershell
-$xzBase = 'http://localhost:8877'
+$xzBase = 'http://localhost:8787'
 $xzOrigin = 'http://localhost:5173'
 $xzSecure = Read-Host '本机 SEED_DEMO_PASSWORD' -AsSecureString
 $xzPassword = [System.Net.NetworkCredential]::new('', $xzSecure).Password
@@ -70,7 +70,7 @@ Remove-Variable xzPassword,xzSecure,xzLoginBody -ErrorAction SilentlyContinue
 $xzLogin.user.role
 ```
 
-预期角色为 `consumer`。下列所有请求都传 `-WebSession $xzSession`；写请求另传同源 `Origin` 和**每次新操作独立**的 `Idempotency-Key`。若 API 端口不是 8877，先改 `$xzBase`。
+预期角色为 `consumer`。下列所有请求都传 `-WebSession $xzSession`；写请求另传同源 `Origin` 和**每次新操作独立**的 `Idempotency-Key`。若 API 端口不是代码默认的 8787，先改 `$xzBase`。
 
 ### 4.1 本人账户、自然月预算和真实/未知依据
 
