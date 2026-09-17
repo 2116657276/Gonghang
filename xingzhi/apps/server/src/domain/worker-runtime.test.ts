@@ -1040,3 +1040,63 @@ test('M1 收口 3：最终文案失败后草稿产物仍可恢复，运行列表
     assert.equal(listed.items[0]!.id,run.runId);assert.equal(listed.nextCursor,null);
   } finally {await resetModelLedger();}
 });
+
+test('M1 收口 1 补充：惰性过期释放重新评估入口，放弃重放返回现状',async()=>{
+  const f=await m1ClosureFixture();const session=await createSession(f.ids.user);
+  const cookies={xingzhi_session:session.token};const headers=()=>({origin:config.webOrigin,'idempotency-key':randomUUID()});
+  const basis=await f.versions();
+
+  // 1) 直接构造过期 proposed 意图后重新发起购买评估：readPurchaseItem 的惰性清理
+  //    应先把旧意图转为 expired，评估成功而不是 ITEM_NOT_ORDERABLE。
+  const assessmentId=randomUUID();const expiredIntentId=randomUUID();
+  await pool.query(`INSERT INTO funding_assessments
+      (id,owner_id,period_id,account_id,budget_item_id,quote_id,financial_version,period_version,
+        quote_version,replaced_estimate_minor,quoted_amount_minor,incremental_impact_minor,status,
+        basis_snapshot_id,expires_at,created_at)
+    VALUES($1,$2,$3,$4,$5,$6,$7,$8,1,8000,9900,1900,'allowed',$9,
+      now()-interval '5 minutes',now()-interval '10 minutes')`,
+  [assessmentId,f.ids.user,f.ids.period,f.ids.account,f.ids.item,f.ids.quote,
+    basis.financial,basis.period,f.ids.snapshot]);
+  await pool.query(`INSERT INTO purchase_intents
+      (id,owner_id,period_id,budget_item_id,quote_id,assessment_id,financial_version,period_version,
+        quote_version,expires_at,idempotency_key,created_at)
+    VALUES($1,$2,$3,$4,$5,$6,$7,$8,1,now()-interval '5 minutes',$9,now()-interval '10 minutes')`,
+  [expiredIntentId,f.ids.user,f.ids.period,f.ids.item,f.ids.quote,assessmentId,
+    basis.financial,basis.period,randomUUID()]);
+  const {assessPurchasePreview}=await import('./purchase-assessment.js');
+  const reassessment=await transaction(client=>assessPurchasePreview(client,f.ids.user,{
+    periodId:f.ids.period,budgetItemId:f.ids.item,quoteId:f.ids.quote,
+    expectedFinancialVersion:basis.financial,expectedPeriodVersion:basis.period,
+    expectedQuoteVersion:1,mode:'preview'}));
+  assert.equal(reassessment.status,'allowed');
+  assert.equal((await pool.query('SELECT status FROM purchase_intents WHERE id=$1',[expiredIntentId])).rows[0].status,'expired');
+
+  // 2) 同键幂等重放：同一 Idempotency-Key 再次放弃返回原响应，不冲突。
+  const {createPurchaseIntent}=await import('./purchase-intents.js');
+  const rejectionKey=randomUUID();
+  const intent=await transaction(client=>createPurchaseIntent(client,f.ids.user,rejectionKey,{
+    periodId:f.ids.period,budgetItemId:f.ids.item,quoteId:f.ids.quote,
+    assessmentId:reassessment.assessmentId,
+    expectedFinancialVersion:basis.financial,expectedPeriodVersion:basis.period,
+    expectedQuoteVersion:1}));
+  const firstReject=await app.inject({method:'POST',
+    url:`/api/purchase-intents/${intent.purchaseIntentId}/rejections`,
+    cookies,headers:{origin:config.webOrigin,'idempotency-key':rejectionKey},
+    payload:{expectedStatus:'proposed'}});
+  assert.equal(firstReject.statusCode,200,firstReject.body);
+  assert.equal(firstReject.json().data.status,'rejected');
+  const replay=await app.inject({method:'POST',
+    url:`/api/purchase-intents/${intent.purchaseIntentId}/rejections`,
+    cookies,headers:{origin:config.webOrigin,'idempotency-key':rejectionKey},
+    payload:{expectedStatus:'proposed'}});
+  assert.equal(replay.statusCode,200,replay.body);
+  assert.deepEqual(replay.json(),firstReject.json());
+
+  // 3) 已终结意图上用新键再次放弃：返回现状 rejected，不改写状态。
+  const secondReject=await app.inject({method:'POST',
+    url:`/api/purchase-intents/${intent.purchaseIntentId}/rejections`,
+    cookies,headers:headers(),payload:{expectedStatus:'proposed'}});
+  assert.equal(secondReject.statusCode,200,secondReject.body);
+  assert.equal(secondReject.json().data.status,'rejected');
+  assert.equal((await pool.query('SELECT status FROM purchase_intents WHERE id=$1',[intent.purchaseIntentId])).rows[0].status,'rejected');
+});
