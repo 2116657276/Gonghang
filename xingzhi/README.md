@@ -1,14 +1,16 @@
 # 行止本地运行说明
 
-更新日期：2026-09-16。本文描述当前代码和本地运行边界。新产品文档见[文档中心](docs/README.md)，SQL 与种子改造见[开发计划](docs/03-engineering/development-plan.md)；现有程序与新方向的总体进度以文档中心和验证策略为准。001—029、A00—A06、B00—B07 及 M1 后端补充收口已进入当前代码基线；隔离数据库的类型检查与 74/74 目标套件、消费者 HTTP 连续链、Worker、真实模型有账户/无账户代表性检查均已通过，M1 后端契约已冻结，可以进入 M2 前端联调。新流程支付宝沙箱连续演示、真实银行和 M2 页面验收仍未完成。现有通用 seed 仍是旧 A/B/C/D 数据，新资金样例使用独立初始化入口。
+更新日期：2026-09-17。本文描述当前代码和本地运行边界。新产品文档见[文档中心](docs/README.md)，SQL 与种子改造见[开发计划](docs/03-engineering/development-plan.md)；现有程序与新方向的总体进度以文档中心和验证策略为准。001—029、A00—A06、B00—B07 及 M1 后端补充收口已进入当前代码基线；隔离数据库的类型检查与 74/74 目标套件、消费者 HTTP 连续链、Worker、真实模型有账户/无账户代表性检查均已通过，M1 后端契约已冻结，同日后续 75/75 回归及构建／提交登记已完成，可以进入 M2.1 小程序平台与会话开发，见[开发计划](docs/03-engineering/development-plan.md)。新流程支付宝沙箱连续演示、真实银行和 M2 页面验收仍未完成。现有通用 seed 仍是旧 A/B/C/D 数据，新资金样例使用独立初始化入口。
 
 | 项目 | 当前事实 |
 | --- | --- |
 | 运行组成 | Vue／Vite、Fastify API、worker、PostgreSQL |
 | 本地地址 | 网页 `http://localhost:5173`，API `http://127.0.0.1:8787` |
-| 支付 | 当前日常 simulation，历史沙箱订单保留原环境；正式演示才按授权使用 sandbox |
-| 数据 | 本机 `xingzhi_dev` 保留原交易资料并已应用 001—029；当前有 24 条历史订单、B00 固定 Demo 报价 2 条和 `m2-dev` 隔离场景报价 2 条，A00 稳定资金样例尚未加载（演示资金事实由 `m2-dev` 隔离场景提供），尚无真实银行事实 |
+| 支付 | 小程序首版与日常 simulation；独立支付宝渠道演示才按授权使用 sandbox，历史订单保持原环境 |
+| 数据 | 本机 `xingzhi_dev` 保留原交易资料并已应用 001—029；Demo 资金与报价通过独立入口或隔离场景按需准备，实际数量以命令输出和目标数据库查询为准；尚无真实银行事实 |
 | 凭据 | 仅本机被 Git 忽略的环境与秘密文件，不复制到文档或模型 |
+
+微信消费者方案见[小程序前端实施方案](docs/03-engineering/miniapp-frontend.md)：拟新增 apps/miniapp，当前尚不存在 Taro 启动或构建命令。下面的 pnpm dev 仍只运行网页、API 与 worker，不能启动微信小程序；M2.1 实施后再登记实际命令、版本和输出路径。当前小程序登录及真机网络也未验证。
 
 以下命令是已有程序的操作说明，不是要求立即执行。空库执行 `pnpm db:migrate` 会按顺序应用 001—029；本机 `xingzhi_dev` 已完成全部迁移。运行通用 `pnpm db:seed` 仍只会得到旧 A/B/C/D 目录和测试账号；A00 资金样例须单独初始化，不含真实银行流水或还款样本。
 
@@ -24,7 +26,7 @@ pnpm db:seed
 pnpm dev
 ```
 
-`pnpm dev` 同时启动网页、API 与 worker。`pnpm db:migrate` 只应用未执行的顺序 SQL 迁移；`pnpm db:seed` 可重复执行，用于补齐本地测试账号和 A/B/C/D 目录，不写入真实数据。M1 隔离验收场景使用 `pnpm --filter @xingzhi/server db:seed:consumer-scenario <scenario-key> <上海当前日期>`，显式创建新消费者、账户、自然月预算和当日报价；相同场景只返回原记录，不覆盖状态、延长报价或恢复撤回账户。
+`pnpm dev` 同时启动网页、API 与 worker。`pnpm db:migrate` 只应用未执行的顺序 SQL 迁移；`pnpm db:seed` 用于首次空库补齐测试账号和旧 A/B/C/D 目录；重复执行会覆盖并激活该旧目录，不作为既有业务库的日常刷新入口，不写入真实银行数据。M1 隔离验收场景使用 `pnpm --filter @xingzhi/server db:seed:consumer-scenario <scenario-key> <上海当前日期>`，显式创建新消费者、账户、自然月预算和当日报价；相同场景只返回原记录，不覆盖状态、延长报价或恢复撤回账户。需要新资金基准时换用新的场景标识，登录取命令输出的场景账号，不能固定使用 consumer-a 或 m1-m2-dev；同一未结束交易链继续使用原场景。
 
 历史真实模型只读烟测和 T04／T08 方案联调已通过，API-24 提供查询与方案助手入口；Pi 依赖已安装。服务端只从本机 `.env` 读取 `DEEPSEEK_API_KEY`，固定 `DEEPSEEK_BASE_URL=https://api.deepseek.com`，当前配置为 `DEEPSEEK_MODEL=deepseek-flash`（DeepSeek V4.1 Flash，用户简称“ds4.1flash”）；累计模型费用上限为人民币 100 元，采用每分钟 10 次、突发 2、同计划并发 1 的常规服务端限流。[历史验收归档](docs/archive/transaction-verification.md)第十八至二十二节记录原模型、进程恢复、授权连续性及交易核验；现行[新版验证策略](docs/04-quality/verification.md)不沿用这些章节编号。未配置密钥或人民币预算账本时不会发起外部模型调用。
 

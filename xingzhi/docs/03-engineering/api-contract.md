@@ -1,12 +1,12 @@
 # 接口与支付集成契约：银行场景下的青年消费规划
 
-> 消费者新产品的 A/B 后端共同字段、状态和当前接口，现以项目根目录《行止_AB后端开发总方案_现状接口数据库任务.md》及 `packages/contracts/src/consumer-backend.ts` 为准。本文件保留旧交易接口说明和早期 M1 设计目标；下文明确标注“设计目标／当前未注册”的内容不能作为前端当前可调用接口。新路径、撤回响应和草稿分支统一见 [A/B 后端总方案](../../行止_AB后端开发总方案_现状接口数据库任务.md)第 5 节。历史路由是否可用仍以代码为准。
+> 消费者新产品的 A/B 后端共同字段、状态和当前接口，现以项目根目录《行止_AB后端开发总方案_现状接口数据库任务.md》及 `packages/contracts/src/consumer-backend.ts` 为准。本文件维护公共约定与 M2 小程序接入与恢复增量（1.3—1.4），并保留旧交易接口说明和早期 M1 设计目标；下文明确标注“设计目标／当前未注册”的内容不能作为前端当前可调用接口。新路径、撤回响应和草稿分支统一见 [A/B 后端总方案](../../行止_AB后端开发总方案_现状接口数据库任务.md)第 5 节。历史路由是否可用仍以代码为准。
 
 | 字段 | 内容 |
 | --- | --- |
 | 文档编号 | XZ-API |
-| 更新日期 | 2026-09-16 |
-| 状态 | 001—029、A00—A06、B00—B07 与 M1 补充收口已进入当前代码基线；HTTP 与目标回归通过，M1 后端契约冻结并进入 M2 |
+| 更新日期 | 2026-09-17 |
+| 状态 | 001—029、A00—A06、B00—B07 与 M1 补充收口已进入当前代码基线；HTTP 与目标回归通过，M1 后端契约冻结；M2 小程序会话与恢复读取增量均待实现 |
 | 适用范围 | 账户范围、轻量流水、30 天规划、登记目录、消费执行、计划变化和支付适配 |
 | 实施顺序 | M1 后端迁移与接口 → M2 前端统一工作区 → M3 集中验收 |
 
@@ -18,7 +18,7 @@
 
 所有路径使用 `/api` 前缀。用户身份只来自服务端会话，不能使用请求体中的 `userId`、`merchantId` 或账户标识替代归属判断。消费者只能访问自己的账户、流水、资金规划和消费计划；商户管理员只处理自己的目录、订单和退款职责；审核者只能访问服务端分配计划的脱敏结果。
 
-写请求使用 `Idempotency-Key`；修改既有规划、计划或目录时使用 `expectedVersion`。同一主体、路径、幂等键和相同参数返回原结果，参数不同返回冲突。服务端计算金额和资金影响，客户端或 Agent 只提交选择、用户输入和确认范围。余额、账单和退款金额均为整数分，币种单独返回，首版固定 `CNY`。
+消费者业务写请求使用 `Idempotency-Key`；新消费者按 DTO 提供 `expectedFinancialVersion`、`expectedPeriodVersion`、`expectedQuoteVersion`，旧计划／目录接口才沿用其 `expectedVersion`。登录／退出按各自会话契约处理，不强加业务幂等账本。同一主体、路径、幂等键和相同参数返回原结果，参数不同返回冲突。服务端计算金额和资金影响，客户端或 Agent 只提交选择、用户输入和确认范围。余额、账单和退款金额均为整数分，币种单独返回，首版固定 `CNY`。
 
 数据库时间保存为带时区的 UTC 时间戳，规划响应同时返回 `timezone`（首版 `Asia/Shanghai`）以及按该时区计算的日期。账户快照必须返回：
 
@@ -33,23 +33,15 @@
 
 `asOf` 是余额事实时间，`coveredThroughAt` 是快照已包含流水的截止时间，`capturedAt` 只表示本地收到时间。刷新快照后，服务端以新基线和覆盖截止点重算，不把旧余额与新快照包含的全量流水相加。
 
-异步业务写接口返回 `operationId` 和受理状态，HTTP 202 不表示支付、退款或银行入账成功。读取接口返回已持久化事实、来源、观察时间、版本和未决事项。财务 source 的总集合为 `demo`、`bank_api`、`user_input`，但各表只接受数据契约规定的子集：账户、快照和已发生流水不接受 `user_input`；还款安排可接受三类来源，用户预计收入和必要支出规划行只使用 `user_input`。交易 `environment` 使用 `simulation`、`sandbox`，必须与财务来源分别返回，不能把测试数据写成工行真实接口结果。
+受理型 operation/job 接口按其 DTO 返回 `operationId` 和受理状态，HTTP 202 不表示支付、退款或银行入账成功；普通资源创建和本人确认的状态码以各路由为准。读取接口返回已持久化事实、来源、观察时间、版本和未决事项。财务 source 的总集合为 `demo`、`bank_api`、`user_input`，但各表只接受数据契约规定的子集：账户、快照和已发生流水不接受 `user_input`；还款安排可接受三类来源，用户预计收入和必要支出规划行只使用 `user_input`。交易 `environment` 使用 `simulation`、`sandbox`，必须与财务来源分别返回，不能把测试数据写成工行真实接口结果。
 
 ### 1.2 统一响应和错误
 
-普通读取直接返回业务快照；列表使用 `items`、`entries`、`obligations` 或 `plans` 数组，分页时返回 `nextCursor`。涉及条件判断的响应使用以下结构：
+新消费者普通成功响应为 `{ data, meta }`，元信息可包含资金／周期／报价版本、来源与时间；错误为 `{ error: { code, message, details? }, correlationId }`。异步受理按具体 DTO 返回 `operationId`／`state=accepted`，详情及列表数组名以共享类型为准，不假定所有列表都叫 items。
 
-```json
-{
-  "status": "fits|requires_change|conditional|unknown",
-  "impactDate": "2026-09-20",
-  "reasonCodes": ["RESERVE_BELOW_TARGET"],
-  "cashflowVersion": 3,
-  "basisSnapshotId": "uuid"
-}
-```
+新消费者评估状态固定为 `allowed|needs_adjustment|blocked|unknown`。旧接口的 `fits|requires_change|conditional|unknown` 仅用于旧流程，不用于新前端准入；`conditional` 不得当作 allowed。unknown 响应中的 `shortfallMinor=0` 表示缺口不可量化，不表示资金足够；可空资金字段保持 null，结合状态和原因展示。
 
-`status=unknown` 表示资料缺失、覆盖范围不明或外部事实未核验，不能当作“可以购买”。新消费者接口的错误码以共享契约 `consumerApiErrorCodes` 为唯一来源；下表只列当前共享枚举中的代码：
+新消费者接口的错误码以共享契约 `consumerApiErrorCodes` 为唯一来源；下表只列当前共享枚举中的代码：
 
 | 错误码 | 含义 |
 | --- | --- |
@@ -69,11 +61,42 @@
 | `CONFIRMATION_REQUIRED` | 缺少本人明确确认 |
 | `CONFIRMATION_SCOPE_MISMATCH` | 确认范围与本次草稿、账户或操作不一致 |
 
-错误响应继续使用当前 `{ error, message, details? }` 形式。错误详情只返回可解释的业务事实和字段，不返回模型思维链、支付密钥或银行凭据。
+消费者 Agent 的模型未配置分支当前也返回 HTTP 503 `{error:"MODEL_NOT_CONFIGURED",message}`，角色／Origin 等前置拒绝可能使用旧错误结构；客户端按 error 的字符串／对象两种实际形状做明确归一，503 提示结构化填写仍可用，不自动重试模型。既有会话及部分历史路由仍使用 `{ error: string, message, details? }`；旧登录成功为 `{user}`、退出为 204。前端应按接口族显式适配，不把旧封装直接用于新消费者 DTO。所有错误详情只返回可解释的业务事实和字段，不返回模型思维链、支付密钥或银行凭据。
+
+### 1.3 M2 小程序会话接入（待实现）
+
+2026-09-17 静态核对：`auth/session.ts` 只从 `xingzhi_session` Cookie 取会话；`POST /api/sessions`、退出和消费者多处写路由要求 `Origin === WEB_ORIGIN`。冻结的 M1 消费者业务 DTO 可以复用，但现有身份传输不能直接宣称可用于微信小程序。以下为 M2.1 新增契约，不是已注册 API。
+
+| 路径／调用 | 拟实现契约 |
+| --- | --- |
+| `POST /api/miniapp/sessions` | 测试消费者以 `{email,password}` 登录；校验密码及 consumer 角色后，返回 `{data:{token,expiresAt,user},meta:{}}`，失败使用新错误结构；该入口不依赖网页 Origin，不签发商户／审核身份，不设置网页 Cookie |
+| 小程序请求身份 | `Authorization: Bearer <token>`；令牌沿用现有随机不透明值、服务端摘要存储、24 小时有效期与撤销机制，不新增 JWT 或自动刷新体系 |
+| `GET /api/session` | 接受已验证的小程序会话读取本人身份，保留现有 `{user}` 响应；不得只凭客户端 role／ownerId 决定身份 |
+| `DELETE /api/session` | 撤销当前小程序会话并返回 204；客户端删除本地令牌及用户缓存，后续原令牌必须失效；网页退出仍执行原 Cookie／Origin 规则 |
+
+在现有 sessions 中追加并持久化客户端类型（历史会话回填 web，新入口写 miniapp）；迁移使用下一个未使用编号，不改写已应用迁移。Bearer 只接受 miniapp 会话，Cookie 只接受 web 会话；同时带两种凭据时拒绝歧义，不用无效 Bearer 回退到 Cookie。所有消费者写路由以已验证的会话类型选择来源门禁：网页保留 Origin/CSRF 防护，小程序以验证后的令牌及同一权限／归属校验受理。缺失 Origin、本地角色请求头或自报 clientType 均不能单独放行。
+
+实现时必须检查 `auth/guards.ts` 及各 route 文件内直接比较 Origin 的分支，不能只改公共 guard 而漏掉账户、预算、草稿、意图、调整或原单善后入口。共享会话校验复用现有过期／撤销逻辑；新增登录复用密码校验并施加有界失败限流，不记录密码或原始令牌。仅对这一实际平台接入改动补必要定向验证：消费者真机登录／草稿写入、退出后失效、过期或伪造令牌拒绝、角色与跨账户隔离、网页非法 Origin 拒绝、双凭据拒绝。具体返回类型在实施时加入共享契约，并同步本节的实现状态及证据。
+
+该方案不接入微信身份、真实开户或第三方身份平台；购买确认、资金准入、幂等、环境和原单恢复规则不变。前端令牌只发送至指定 API，退出／用户切换清理本地敏感状态，不放入 URL、分享、日志或 Agent 上下文。当前无小程序会话测试结果，见[小程序实施方案](miniapp-frontend.md)。
+
+### 1.4 M2 交易读取与恢复补充（待实现）
+
+2026-09-17 静态核对：当前有购买意图创建／确认／放弃、`GET /api/orders/:id`、预算事件和 `GET /api/operations/:id`，但没有新消费者订单列表或购买意图列表／详情。网页旧 `/api/plans/:id/orders` 与商户订单列表不能供新消费者复用。为支持订单入口、退出后重新登录和冷启动恢复，M2.3 在已有表上补以下只读入口，不另建订单中心或事件索引。
+
+| 拟新增读取 | 最小响应与范围 |
+| --- | --- |
+| `GET /api/purchase-intents?periodId=&cursor=` | 本人意图摘要列表，包含 purchaseIntentId、periodId、status、expiresAt、可空 orderId；可按本人周期筛选，支持有限分页，返回 `{data:{items,nextCursor},meta:{asOf}}` |
+| `GET /api/purchase-intents/:id` | 本人意图状态、原确认依据／不可变报价快照、过期时间及可空 orderId；另定义读取 DTO，不能复用只允许 proposed 的创建响应 schema 来表示终态 |
+| `GET /api/orders?periodId=&cursor=` | 本人新消费者订单列表，省略周期时可读取本人各周期；每项复用 ConsumerOrderView 并附已有操作的 operationId/type/state，返回 `{data:{items,nextCursor},meta:{asOf}}`；详情和操作内容继续读现有 GET |
+
+三项均需真实会话和 owner 归属；列表仅查新消费者订单，按创建时间与 ID 稳定分页，单页有上限。仅返回用户可见业务事实，不返回渠道凭据、任务内部载荷或模型推理。已撤回账户／closed 周期的历史意图和订单仍可读。GET 不触发意图过期写入或新交易；proposed 但 expiresAt 已过时，界面显示已过有效期并停止确认，持久状态由既有写路径处理。详情仅呈现当时评估，重新确认仍通过最新服务端准入。
+
+先补共享读取 DTO、路由与本人／越权／分页／终态恢复的定向验证，再实现订单入口和意图恢复；现有创建／确认／支付契约不变。没有本地缓存时也必须能从本人列表发现原意图、订单及操作，不通过重新 POST 创建另一笔对象“恢复”。本节所列 API 尚未注册，小程序表格中的相关页面是待开发目标。
 
 ## 二、当前实现并继续保留的接口
 
-下表登记当前代码中的主要路由。它们是既有实现基线；M1 通过兼容扩展使新产品使用这些入口，不复制另一套交易 API。
+下表登记主要既有路由，旧生活计划交易路径不作为新消费者购买入口。新消费者使用 A/B 总方案第 5、11 节的 budget-periods、purchase-intents、订单及原单善后路径；复用服务端交易底座不等于复用旧网页调用顺序。
 
 ### 2.1 身份和目录
 
@@ -297,9 +320,9 @@ Worker 的 operation/job 可绑定旧 `plan_id` 或新 `budget_period_id`，两�
 
 `PUT /api/cashflow-plans/:id`（消费者）以完整请求替换保留金额及用户规划行，请求为 `{ expectedVersion, reserveTargetMinor, items }`。已有行携带 `id`，新增行省略 `id`；服务端校验行归属，遗漏的旧行标记 cancelled 并保留历史，新旧行在同一事务落地，版本只递增一次。不能提交派生订单行或银行字段；时区固定 `Asia/Shanghai`，不开放任意变更。重复幂等请求返回原结果，不重复新增行；版本冲突返回 409。账户快照、覆盖截止点、还款事实或关联消费计划发生变化时，服务端递增 `version`，旧可行性卡和购买草稿不再可直接确认。
 
-### 3.4 目标草稿、候选和关联（设计目标，当前未注册）
+### 3.4 旧 plans 草稿方案（已放弃，仅作历史参考）
 
-当前 `POST /api/plans` 仍是历史交易入口，`itemIds` 至少需要一个商品 ID；它没有实现允许空项目的 M1 扩展。新消费者无账户需求草稿应使用 `POST /api/ai/planning-drafts` 的 `periodId=null` 分支，不创建旧计划。允许空项目的 `cashflowState=draft` 仍是设计目标，当前未注册。
+当前 `POST /api/plans` 是历史交易入口，`itemIds` 至少需要一个商品 ID。新消费者无账户需求草稿使用 `POST /api/ai/planning-drafts` 的 `periodId=null` 分支，不创建旧计划；允许空项目的 `cashflowState=draft` 及以下关联接口已被现行月度预算方案取代，不再计划实现。
 
 `POST /api/plans/:id/cashflow-link`（消费者，设计目标，当前未注册）请求 `{ "cashflowPlanId": "uuid", "expectedVersion": 1 }`。仅允许 `cashflowState=draft` 的新计划关联当前用户的 active 资金规划；旧 `cashflowState=legacy` 的 NULL 计划不得改绑，原订单和善后继续按原授权完成。关联成功后计划状态变为 `active`，服务端返回新的计划版本和资金规划版本。
 
@@ -394,18 +417,18 @@ Worker 的 operation/job 可绑定旧 `plan_id` 或新 `budget_period_id`，两�
 - `simulation` 只调用本地模拟 worker，默认日常开发使用；模拟付款、关单和退款结果是测试事实。
 - `sandbox` 使用支付宝沙箱的固定业务号、收银台交接、主动查单和可选通知；只有渠道查询或验签后的结果才能写入沙箱订单事实。
 - 支付宝沙箱成功不代表工行账户已扣款，退款成功不代表主账户已到账；两者不能自动写成 `bank_api` 流水。
-- 任何登录密码、支付密码、应用密钥和证书都不进入请求体、Agent 上下文、日志或导出。
+- 银行／支付密码、应用密钥和证书不进入消费者业务请求、Agent 上下文、日志或导出；测试账号密码只用于 HTTPS 登录请求，不保存或记录。
 
 ## 六、迁移、兼容和阶段门槛
 
 M1 已按 013—029 的增量结构落入当前代码基线；A00—A06、B00—B07 与 M1 补充收口已有实现，simulation 领域检查、消费者 HTTP 连续验收和 74/74 目标套件均已在隔离数据库登记通过。已有 `/api/catalog`、`/api/plans`、购买、变更和支付路径继续保留，新消费者路径按预算周期和购买意图分流。
 
-迁移后，旧 `plans` 回填 `cashflowState=legacy` 且 `cashflowPlanId=NULL`；它们只能完成迁移前已受理的订单、关单、退款和核验。新空状态计划明确写 `cashflowState=draft`，可以没有账户规划但只能编辑；关联 active 规划后才允许新购买确认和建单。旧订单不得搬到新规划，不能通过旧路径绕过资金准入。
+旧 `plans/cashflowState` 保留历史交易及早期设计含义，不是新消费者空状态 API。新前端用 `planning-drafts` 的 periodId=null 分支保存无账户需求，用户确认后写 `budget_periods/budget_items`，通过 active 周期、有效评估和 `purchase-intents` 本人确认建单。旧订单不得搬到新周期，不能用旧计划入口绕过新资金准入。
 
 | 阶段 | API 工作 | 状态 |
 | --- | --- | --- |
 | M1 后端 | A00—A06、B00—B07、001—029、补充收口和统一 API 证据 | 集中验收通过（HTTP 连续链、74/74 套件、真实模型代表性检查），M2 契约冻结 |
-| M2 前端 | 基于已有快照和新规划响应统一空状态、记账、规划、候选、确认、支付与变化调整 | 未开始 |
+| M2 前端 | 按[小程序方案](miniapp-frontend.md)先实施会话与真机接入，再串联规划、确认、支付和变化；1.3—1.4 为待实现增量 | 方案已确定，未实施 |
 | M3 集中验收 | 一次性核对权限、余额基准、快照覆盖、去重、跨计划、模拟／沙箱隔离和完整演示 | 未开始 |
 
 M1 的 API 验收必须能从“空状态目标草稿”走到“账户关联、候选比较、用户确认、建单、支付、突发支出、变更确认、订单／退款结果和规划复算”。只读候选、可行性卡和结束复盘不独立形成账本。现有交易、授权、幂等和支付表及路径继续作为执行基础，新增财务接口只提供解释和现金流准入所需的最小事实。
