@@ -70,6 +70,7 @@ test('B02 planning drafts keep demand, budget and Agent execution boundaries sep
         id: request.headers['x-test-user'] === 'other' ? otherId : ownerId,
         email: '', displayName: '', role: role as 'consumer' | 'reviewer',
       };
+      if (request.headers['x-test-transport'] === 'bearer') request.sessionTransport = 'bearer';
     });
     const runInCurrentTransaction = async <T>(run: (transactionClient: PoolClient) => Promise<T>) => run(client);
     await app.register(registerPlanningDraftApi, {
@@ -116,6 +117,40 @@ test('B02 planning drafts keep demand, budget and Agent execution boundaries sep
     assert.deepEqual(read.json(), created.json());
     const hidden = await app.inject({ method: 'GET', url: `/api/ai/planning-drafts/${created.json().data.draftId}`, headers: { 'x-test-role': 'consumer', 'x-test-user': 'other' } });
     assert.equal(hidden.statusCode, 404);
+
+    const accepted = await app.inject({
+      method: 'POST', url: `/api/ai/planning-drafts/${created.json().data.draftId}/acceptance`,
+      headers: { ...headers, 'idempotency-key': 'b02-accept-0001' },
+      payload: { expectedStatus: 'draft', confirmedByUser: true },
+    });
+    assert.equal(accepted.statusCode, 200);
+    assert.equal(accepted.json().data.status, 'accepted');
+    const acceptRepeated = await app.inject({
+      method: 'POST', url: `/api/ai/planning-drafts/${created.json().data.draftId}/acceptance`,
+      headers: { ...headers, 'idempotency-key': 'b02-accept-0001' },
+      payload: { expectedStatus: 'draft', confirmedByUser: true },
+    });
+    assert.deepEqual(acceptRepeated.json(), accepted.json());
+    const invalidDiscard = await app.inject({
+      method: 'POST', url: `/api/ai/planning-drafts/${created.json().data.draftId}/discard`,
+      headers: { ...headers, 'idempotency-key': 'b02-discard-conflict' },
+      payload: { expectedStatus: 'draft', confirmedByUser: true },
+    });
+    assert.equal(invalidDiscard.statusCode, 409);
+
+    const bearerCreated = await app.inject({
+      method: 'POST', url: '/api/ai/planning-drafts',
+      headers: { 'idempotency-key': 'b02-bearer-create', 'x-test-role': 'consumer', 'x-test-transport': 'bearer' },
+      payload: demand,
+    });
+    assert.equal(bearerCreated.statusCode, 201);
+    const bearerDiscarded = await app.inject({
+      method: 'POST', url: `/api/ai/planning-drafts/${bearerCreated.json().data.draftId}/discard`,
+      headers: { 'idempotency-key': 'b02-bearer-discard', 'x-test-role': 'consumer', 'x-test-transport': 'bearer' },
+      payload: { expectedStatus: 'draft', confirmedByUser: true },
+    });
+    assert.equal(bearerDiscarded.statusCode, 200);
+    assert.equal(bearerDiscarded.json().data.status, 'discarded');
 
     const budget = {
       periodId, expectedFinancialVersion: 1, expectedPeriodVersion: 1,

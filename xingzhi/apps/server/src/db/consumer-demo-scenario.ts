@@ -15,19 +15,27 @@ function shanghaiToday(now = new Date()) {
 
 export async function seedConsumerDemoScenario(client: PoolClient, input: {
   scenarioKey: string; serviceOn: string; password: string; now?: Date;
+  mode?: 'complete' | 'account-only';
 }) {
   if (!/^[a-z0-9][a-z0-9_-]{2,79}$/.test(input.scenarioKey)) {
     throw new Error('场景标识只能包含小写字母、数字、下划线和连字符。');
   }
   const now = input.now ?? new Date();
+  const mode = input.mode ?? 'complete';
   if (input.serviceOn !== shanghaiToday(now)) throw new Error('隔离 Demo 服务日期必须是当前上海日期。');
   const existing = (await client.query<{
-    ownerId: string; accountId: string; periodId: string; serviceOn: string; createdAt: Date;
+    ownerId: string; accountId: string; periodId: string | null; mode: 'complete' | 'account-only';
+    serviceOn: string; createdAt: Date;
   }>(`SELECT owner_id AS "ownerId",account_id AS "accountId",period_id AS "periodId",
-      to_char(service_on,'YYYY-MM-DD') AS "serviceOn",created_at AS "createdAt"
+      mode,to_char(service_on,'YYYY-MM-DD') AS "serviceOn",created_at AS "createdAt"
     FROM consumer_demo_scenarios WHERE scenario_key=$1 FOR UPDATE`, [input.scenarioKey])).rows[0];
-  if (existing) return { scenarioKey: input.scenarioKey, ...existing,
-    createdAt: existing.createdAt.toISOString(), reused: true };
+  if (existing) {
+    if (existing.mode !== mode) {
+      throw new Error(`场景 ${input.scenarioKey} 已按 ${existing.mode} 模式创建，不能改写为 ${mode}。`);
+    }
+    return { scenarioKey: input.scenarioKey, ...existing,
+      createdAt: existing.createdAt.toISOString(), reused: true };
+  }
 
   const email = `m1-${input.scenarioKey}@xingzhi.local`;
   const ownerId = stableUuid(`${input.scenarioKey}:owner`);
@@ -68,30 +76,35 @@ export async function seedConsumerDemoScenario(client: PoolClient, input: {
     VALUES($1,$2,$3,$4,'installment','账单内分期',$5,10000,10000,'upcoming',$6,'demo',$7,1,3)`,
   [stableUuid(`${input.scenarioKey}:installment`), ownerId, liabilityAccountId, accountId,
     monthEnd, billId, `M1-${input.scenarioKey}-INSTALLMENT`]);
-  await client.query(`INSERT INTO budget_periods
-      (id,owner_id,primary_account_id,baseline_snapshot_id,month_start,month_end,
-        savings_target_minor,status,necessities_confirmed_at)
-    VALUES($1,$2,$3,$4,$5,$6,50000,'active',$7)`,
-  [periodId, ownerId, accountId, snapshotId, monthStart, monthEnd, now]);
-  const items = [
-    ['rent', '房租与本月必要开支', 'essential_expense', 80000, 'required', monthEnd, null],
-    ['dinner', '朋友聚餐', 'planned_spend', 8000, 'adjustable', input.serviceOn, 'food'],
-    ['flexible', '其他可调生活开支', 'planned_spend', 32000, 'adjustable', monthEnd, null],
-  ] as const;
-  for (const [code, title, kind, amount, priority, plannedOn, category] of items) {
-    await client.query(`INSERT INTO budget_items
-        (id,owner_id,period_id,account_id,kind,title,category_code,planned_on,
-          user_estimated_amount_minor,priority)
-      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, [stableUuid(`${input.scenarioKey}:${code}`),
-    ownerId, periodId, accountId, kind, title, category, plannedOn, amount, priority]);
+  if (mode === 'complete') {
+    await client.query(`INSERT INTO budget_periods
+        (id,owner_id,primary_account_id,baseline_snapshot_id,month_start,month_end,
+          savings_target_minor,status,necessities_confirmed_at)
+      VALUES($1,$2,$3,$4,$5,$6,50000,'active',$7)`,
+    [periodId, ownerId, accountId, snapshotId, monthStart, monthEnd, now]);
+    const items = [
+      ['rent', '房租与本月必要开支', 'essential_expense', 80000, 'required', monthEnd, null],
+      ['dinner', '朋友聚餐', 'planned_spend', 8000, 'adjustable', input.serviceOn, 'food'],
+      ['flexible', '其他可调生活开支', 'planned_spend', 32000, 'adjustable', monthEnd, null],
+    ] as const;
+    for (const [code, title, kind, amount, priority, plannedOn, category] of items) {
+      await client.query(`INSERT INTO budget_items
+          (id,owner_id,period_id,account_id,kind,title,category_code,planned_on,
+            user_estimated_amount_minor,priority)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, [stableUuid(`${input.scenarioKey}:${code}`),
+      ownerId, periodId, accountId, kind, title, category, plannedOn, amount, priority]);
+    }
+    await seedConsumerCatalog(client, input.serviceOn);
   }
-  await seedConsumerCatalog(client, input.serviceOn);
   await client.query(`INSERT INTO consumer_demo_scenarios
-    (scenario_key,owner_id,account_id,period_id,service_on) VALUES($1,$2,$3,$4,$5)`,
-  [input.scenarioKey, ownerId, accountId, periodId, input.serviceOn]);
-  return { scenarioKey: input.scenarioKey, ownerId, accountId, periodId, serviceOn: input.serviceOn,
-    snapshotAsOf: now.toISOString(), quoteValidThrough: `${input.serviceOn}T23:59:59+08:00`,
-    email, confirmedCashMinor: 200000, savingsTargetMinor: 50000,
-    essentialAndRepaymentMinor: 90000, adjustablePlannedMinor: 40000,
+    (scenario_key,owner_id,account_id,period_id,service_on,mode) VALUES($1,$2,$3,$4,$5,$6)`,
+  [input.scenarioKey, ownerId, accountId, mode === 'complete' ? periodId : null, input.serviceOn, mode]);
+  return { scenarioKey: input.scenarioKey, ownerId, accountId,
+    periodId: mode === 'complete' ? periodId : null, mode, serviceOn: input.serviceOn,
+    snapshotAsOf: now.toISOString(),
+    quoteValidThrough: mode === 'complete' ? `${input.serviceOn}T23:59:59+08:00` : null,
+    email, confirmedCashMinor: 200000, savingsTargetMinor: mode === 'complete' ? 50000 : null,
+    essentialAndRepaymentMinor: mode === 'complete' ? 90000 : null,
+    adjustablePlannedMinor: mode === 'complete' ? 40000 : null,
     createdAt: now.toISOString(), reused: false };
 }

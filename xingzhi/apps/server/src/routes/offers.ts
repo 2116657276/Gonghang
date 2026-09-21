@@ -31,6 +31,16 @@ export async function registerOfferApi(app: FastifyInstance, options: { db?: Pic
       AND ($2::text IS NULL OR category_code=$2) ORDER BY code`, [input.plannedOn, input.categoryCode ?? null]);
     return { data: { items: result.rows.map((row) => offerView.parse(row)) }, meta: {} };
   });
+  app.get('/api/offers/:id', async (request) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const result = await db.query(`SELECT id,code,name,description,category_code AS "categoryCode",
+      location_label AS "locationLabel",tags,purchase_mode AS "purchaseMode",
+      price_minor AS "displayPriceMinor",currency,rule_label AS "ruleLabel"
+      FROM catalog_items WHERE id=$1 AND active AND currency='CNY'`, [id]);
+    const row = result.rows[0];
+    if (!row) throw new AppError(404, 'RESOURCE_FORBIDDEN', '未找到可用候选。');
+    return { data: offerView.parse(row), meta: {} };
+  });
   app.get('/api/offers/:id/quote', async (request) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
     const { plannedOn } = offerSearchInput.pick({ plannedOn: true }).parse(request.query);

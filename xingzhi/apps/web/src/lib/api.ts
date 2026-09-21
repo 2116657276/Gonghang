@@ -1,4 +1,5 @@
 import type { OperationRecheck } from './types.js';
+import { beginIdempotentRequest, completeIdempotentRequest } from './idempotency.js';
 
 export type ApiError = Error & { status?: number; code?: string };
 
@@ -6,16 +7,25 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const method = init.method?.toUpperCase() ?? 'GET';
   const headers = new Headers(init.headers);
   if (init.body) headers.set('Content-Type', 'application/json');
-  if (!['GET', 'HEAD'].includes(method) && !headers.has('Idempotency-Key')) headers.set('Idempotency-Key', crypto.randomUUID());
-  const response = await fetch(`/api${path}`, { ...init, method, headers, credentials: 'include' });
+  const pending = !['GET', 'HEAD'].includes(method) && !headers.has('Idempotency-Key')
+    ? beginIdempotentRequest(method, path, init.body) : null;
+  if (pending) headers.set('Idempotency-Key', pending.key);
+  let response: Response;
+  try { response = await fetch(`/api${path}`, { ...init, method, headers, credentials: 'include' }); }
+  catch (reason) {
+    // 服务端可能已经受理但响应丢失；保留同一个键供用户明确重试。
+    throw reason;
+  }
   if (response.status === 204) return undefined as T;
   const body = await response.json() as T & { error?: string; message?: string };
   if (!response.ok) {
+    if (pending && response.status < 500 && response.status !== 408) completeIdempotentRequest(pending.storageId, pending.key);
     const error = new Error(body.message ?? '操作没有完成。') as ApiError;
     error.status = response.status;
     error.code = body.error;
     throw error;
   }
+  if (pending) completeIdempotentRequest(pending.storageId, pending.key);
   return body;
 }
 

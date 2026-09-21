@@ -13,6 +13,7 @@ declare module 'fastify' {
   interface FastifyRequest {
     authUser?: AuthUser;
     sessionId?: string;
+    sessionTransport?: 'cookie' | 'bearer';
   }
 }
 
@@ -34,7 +35,12 @@ export async function createSession(userId: string) {
 }
 
 export async function loadSession(request: FastifyRequest) {
-  const token = request.cookies[sessionCookie];
+  const authorization = request.headers.authorization;
+  const bearerMatch = authorization?.match(/^Bearer ([A-Za-z0-9_-]{32,200})$/);
+  // An explicit Authorization header must be valid on its own. Do not silently
+  // fall back to a browser cookie when a malformed/unsupported scheme is sent.
+  if (authorization && !bearerMatch) return;
+  const token = bearerMatch?.[1] ?? request.cookies[sessionCookie];
   if (!token) return;
   const result = await query<{
     session_id: string;
@@ -50,6 +56,7 @@ export async function loadSession(request: FastifyRequest) {
   const row = result.rows[0];
   if (!row) return;
   request.sessionId = row.session_id;
+  request.sessionTransport = bearerMatch ? 'bearer' : 'cookie';
   request.authUser = {
     id: row.id,
     email: row.email,

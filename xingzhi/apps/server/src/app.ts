@@ -9,6 +9,8 @@ import { registerBudgetPeriodApi } from './routes/budget-periods.js';
 import { registerPurchaseIntentApi } from './routes/purchase-intents.js';
 import { registerBudgetAdjustmentApi } from './routes/budget-adjustments.js';
 import { registerConsumerAftercareApi } from './routes/consumer-aftercare.js';
+import { registerConsumerPreferencesApi } from './routes/consumer-preferences.js';
+import { registerRuntimeStatusApi } from './routes/runtime-status.js';
 import cookie from '@fastify/cookie';
 import cors from '@fastify/cors';
 import { ZodError } from 'zod';
@@ -22,6 +24,7 @@ import type { BudgetItemPort } from './domain/budget-port.js';
 import type { PlanningDraftPort } from './domain/planning-draft-port.js';
 import { budgetPlanningDraftPort } from './domain/budget-planning-draft-port.js';
 import { applyBudgetItemChange, cancelBudgetItem } from './domain/budget-periods.js';
+import { query } from './db/client.js';
 
 export async function buildApp(options: {
   agentStream?: StreamFn;
@@ -53,6 +56,10 @@ app.addContentTypeParser('application/x-www-form-urlencoded', { parseAs: 'string
   done(null, { rawBody, rawPayload, values });
 });
 app.addHook('preHandler', loadSession);
+app.get('/api/health', async () => {
+  await query('SELECT 1');
+  return { status: 'ok', service: 'xingzhi-server', version: process.env.npm_package_version ?? '0.1.0' };
+});
 app.setErrorHandler((error, _request, reply) => {
   if (error instanceof AppError) return reply.code(error.statusCode).send({ error: error.code, message: error.message, details: error.details });
   if (error instanceof ZodError) return reply.code(400).send({ error: 'INVALID_INPUT', message: '请求参数不符合要求。' });
@@ -68,6 +75,8 @@ await app.register(registerBudgetPeriodApi);
 await app.register(registerPurchaseIntentApi);
 await app.register(registerBudgetAdjustmentApi);
 await app.register(registerConsumerAftercareApi);
+await app.register(registerConsumerPreferencesApi);
+await app.register(registerRuntimeStatusApi);
 await app.register(registerBudgetItemApi, {
   budgetItemPort: options.budgetItemPort ?? { applyBudgetItemChange, cancelBudgetItem },
 });

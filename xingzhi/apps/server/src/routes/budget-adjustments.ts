@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z, ZodError } from 'zod';
 import { budgetAdjustmentConfirmInput, emergencyAssessInput } from '@xingzhi/contracts';
-import { config } from '../config.js';
+import { isTrustedWriteRequest } from '../auth/guards.js';
 import { transaction } from '../db/client.js';
 import { confirmBudgetAdjustment, createBudgetAdjustment } from '../domain/budget-adjustments.js';
 import { AppError } from '../domain/errors.js';
@@ -12,7 +12,7 @@ const adjustmentPath = z.object({ id: z.string().uuid() }).strict();
 const eventQuery = z.object({ cursor: z.coerce.number().int().nonnegative().default(0) }).strict();
 
 function writeKey(request: FastifyRequest) {
-  if (request.headers.origin !== config.webOrigin) {
+  if (!isTrustedWriteRequest(request)) {
     throw new AppError(403, 'RESOURCE_FORBIDDEN', '请求来源不被允许。');
   }
   const key = request.headers['idempotency-key'];

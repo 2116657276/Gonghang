@@ -1,0 +1,45 @@
+{
+  "name": "@xingzhi/miniapp",
+  "private": true,
+  "version": "0.1.0",
+  "description": "行止消费者端 H5 / 微信小程序",
+  "scripts": {
+    "dev:h5": "taro build --type h5 --watch",
+    "dev:weapp": "taro build --type weapp --watch",
+    "build:h5": "taro build --type h5",
+    "build:weapp": "taro build --type weapp",
+    "typecheck": "vue-tsc --noEmit"
+  },
+  "dependencies": {
+    "@babel/runtime": "^7.24.4",
+    "@xingzhi/contracts": "workspace:*",
+    "@tarojs/components": "4.2.1",
+    "@tarojs/helper": "4.2.1",
+    "@tarojs/plugin-framework-vue3": "4.2.1",
+    "@tarojs/plugin-platform-h5": "4.2.1",
+    "@tarojs/plugin-platform-weapp": "4.2.1",
+    "@tarojs/runtime": "4.2.1",
+    "@tarojs/shared": "4.2.1",
+    "@tarojs/taro": "4.2.1",
+    "vue": "^3.5.16"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.24.4",
+    "@tarojs/cli": "4.2.1",
+    "@tarojs/taro-loader": "4.2.1",
+    "@tarojs/webpack5-runner": "4.2.1",
+    "@types/node": "^22.0.0",
+    "@types/webpack-env": "^1.18.8",
+    "@vue/babel-plugin-jsx": "^1.2.2",
+    "@vue/compiler-sfc": "^3.5.16",
+    "babel-preset-taro": "4.2.1",
+    "css-loader": "^7.1.2",
+    "sass": "^1.77.0",
+    "style-loader": "^3.3.4",
+    "tsconfig-paths-webpack-plugin": "^4.2.0",
+    "typescript": "^5.8.3",
+    "vue-loader": "^17.4.2",
+    "vue-tsc": "^2.2.10",
+    "webpack": "5.91.0"
+  }
+}

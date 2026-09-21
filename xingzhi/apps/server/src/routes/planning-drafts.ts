@@ -10,7 +10,7 @@ import {
   type PlanningDraftItem,
   type PlanningDraftView,
 } from '@xingzhi/contracts';
-import { config } from '../config.js';
+import { isTrustedWriteRequest } from '../auth/guards.js';
 import { query, transaction } from '../db/client.js';
 import { AppError } from '../domain/errors.js';
 import { runIdempotent } from '../domain/idempotency.js';
@@ -20,6 +20,10 @@ type TransactionRunner = <T>(run: (client: PoolClient) => Promise<T>) => Promise
 type QueryClient = Pick<PoolClient, 'query'>;
 
 const idPath = z.object({ id: z.string().uuid() }).strict();
+const transitionInput = z.object({
+  expectedStatus: z.literal('draft'),
+  confirmedByUser: z.literal(true),
+}).strict();
 
 export const unavailablePlanningDraftPort: PlanningDraftPort = {
   async assessPlanningDraft() {
@@ -28,7 +32,7 @@ export const unavailablePlanningDraftPort: PlanningDraftPort = {
 };
 
 function writeKey(request: FastifyRequest) {
-  if (request.headers.origin !== config.webOrigin) {
+  if (!isTrustedWriteRequest(request)) {
     throw new AppError(403, 'RESOURCE_FORBIDDEN', '请求来源不被允许。');
   }
   const key = request.headers['idempotency-key'];
@@ -142,6 +146,30 @@ function storedDraft(row: {
   });
 }
 
+type StoredDraftRow = Parameters<typeof storedDraft>[0];
+
+async function transitionDraft(
+  client: QueryClient,
+  ownerId: string,
+  draftId: string,
+  targetStatus: 'accepted' | 'discarded',
+) {
+  const row = (await client.query<StoredDraftRow>(`SELECT id,period_id AS "periodId",
+      basis_financial_version AS "basisFinancialVersion",
+      basis_period_version AS "basisPeriodVersion",status,validated_payload AS "validatedPayload"
+    FROM planning_drafts WHERE id=$1 AND owner_id=$2 FOR UPDATE`, [draftId, ownerId])).rows[0];
+  if (!row) throw new AppError(404, 'RESOURCE_FORBIDDEN', '未找到该规划草稿。');
+  if (row.status !== 'draft' && row.status !== targetStatus) {
+    throw new AppError(409, 'VERSION_CONFLICT', '草稿状态已经变化，请刷新后再操作。');
+  }
+  if (row.status === 'draft') {
+    await client.query('UPDATE planning_drafts SET status=$3 WHERE id=$1 AND owner_id=$2',
+      [draftId, ownerId, targetStatus]);
+    row.status = targetStatus;
+  }
+  return draftResponse(storedDraft(row));
+}
+
 export async function registerPlanningDraftApi(app: FastifyInstance, options: {
   planningDraftPort?: PlanningDraftPort;
   transaction?: TransactionRunner;
@@ -202,5 +230,23 @@ export async function registerPlanningDraftApi(app: FastifyInstance, options: {
     const row = result.rows[0];
     if (!row) throw new AppError(404, 'RESOURCE_FORBIDDEN', '未找到该规划草稿。');
     return draftResponse(storedDraft(row));
+  });
+
+  app.post('/api/ai/planning-drafts/:id/acceptance', async (request) => {
+    const { id } = idPath.parse(request.params);
+    const input = transitionInput.parse(request.body);
+    const key = writeKey(request);
+    return runTransaction((client) => runIdempotent(client, request.authUser!.id,
+      `POST /api/ai/planning-drafts/${id}/acceptance`, key, input,
+      () => transitionDraft(client, request.authUser!.id, id, 'accepted')));
+  });
+
+  app.post('/api/ai/planning-drafts/:id/discard', async (request) => {
+    const { id } = idPath.parse(request.params);
+    const input = transitionInput.parse(request.body);
+    const key = writeKey(request);
+    return runTransaction((client) => runIdempotent(client, request.authUser!.id,
+      `POST /api/ai/planning-drafts/${id}/discard`, key, input,
+      () => transitionDraft(client, request.authUser!.id, id, 'discarded')));
   });
 }

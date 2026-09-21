@@ -1,0 +1,62 @@
+@use './styles/tokens' as *;
+
+page {
+  min-height: 100%;
+  overflow-x: hidden;
+  color: $text-primary;
+  background: $background;
+  font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  font-size: 26px;
+}
+
+view, text, input, textarea, button, image { box-sizing: border-box; }
+button {
+  width: auto;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  background: none;
+  border: 0;
+  line-height: inherit;
+  font-family: inherit;
+}
+button::after { border: 0; }
+
+.page-safe-bottom { height: calc(28px + env(safe-area-inset-bottom)); }
+.muted { color: $text-secondary; }
+.tertiary { color: $text-tertiary; }
+.amount { font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
+.row { display: flex; align-items: center; }
+.row-between { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.row-between > view:first-child { flex: 1; min-width: 0; }
+.row-between > text:first-child { min-width: 0; overflow-wrap: anywhere; }
+
+.primary-button,
+.secondary-button {
+  display: flex;
+  min-height: 88px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 32px;
+  border-radius: 999px;
+  font-size: 26px;
+  font-weight: 600;
+}
+.primary-button { color: #fff; background: linear-gradient(135deg, #3A7A63 0%, #2B6652 100%); }
+.secondary-button { color: $brand-primary; background: $soft-surface; border: 1px solid $border; }
+.primary-button[disabled], .secondary-button[disabled] { opacity: .5; }
+
+.link-button { color: $brand-primary; font-size: 24px; font-weight: 600; }
+.notice { padding: 20px 24px; border-radius: 18px; font-size: 24px; line-height: 1.55; }
+.notice--info { color: $brand-deep; background: $surface-tint; border: 1px solid #C9DDD2; }
+.notice--warning { color: #7A5524; background: $warning-surface; border: 1px solid #EAD3B0; }
+.notice--error { color: $danger; background: $danger-surface; border: 1px solid #E7C5C1; }
+
+/* Taro H5 会为未配置图标的文字型 tabBar 渲染空图片节点。 */
+.weui-tabbar__icon:not([src]) { display: none; }
+
+@media screen and (max-width: 360px) {
+  .primary-button,
+  .secondary-button { min-height: 82px; padding-right: 24px; padding-left: 24px; font-size: 24px; }
+  .notice { padding: 18px 20px; font-size: 22px; }
+}

@@ -3,5 +3,11 @@ packages:
   - xingzhi/packages/*
 allowBuilds:
   '@google/genai': false
+  '@parcel/watcher': true
+  '@swc/core': true
+  '@tarojs/binding': true
+  '@tarojs/cli': true
+  core-js: false
+  core-js-pure: false
   esbuild: true
   protobufjs: false

@@ -1008,6 +1008,22 @@ test('M1 收口 5：隔离场景可重复且不覆盖状态，账单内分期不
   const authenticated=await app.inject({method:'GET',url:'/api/finance/accounts',
     headers:{cookie:String(login.headers['set-cookie']).split(';')[0]}});
   assert.equal(authenticated.statusCode,200);assert.equal(authenticated.json().data.accounts[0].account.accountId,first.accountId);
+  const miniappLogin=await app.inject({method:'POST',url:'/api/miniapp/sessions',
+    payload:{email:`m1-${key}@xingzhi.local`,password:'test-password'}});
+  assert.equal(miniappLogin.statusCode,200,miniappLogin.body);
+  assert.equal(miniappLogin.headers['cache-control'],'no-store');
+  const miniappSession=miniappLogin.json().data;
+  assert.equal(miniappSession.user.id,first.ownerId);assert.match(miniappSession.token,/^[A-Za-z0-9_-]{43}$/);
+  assert.ok(Date.parse(miniappSession.expiresAt)>Date.now());
+  const bearerAuthenticated=await app.inject({method:'GET',url:'/api/finance/accounts',
+    headers:{authorization:`Bearer ${miniappSession.token}`}});
+  assert.equal(bearerAuthenticated.statusCode,200,bearerAuthenticated.body);
+  const miniappLogout=await app.inject({method:'DELETE',url:'/api/session',
+    headers:{authorization:`Bearer ${miniappSession.token}`}});
+  assert.equal(miniappLogout.statusCode,204,miniappLogout.body);
+  const revoked=await app.inject({method:'GET',url:'/api/session',
+    headers:{authorization:`Bearer ${miniappSession.token}`}});
+  assert.equal(revoked.statusCode,401,revoked.body);
   await pool.query('UPDATE budget_periods SET savings_target_minor=60000 WHERE id=$1',[first.periodId]);
   const second=await transaction(client=>seedConsumerDemoScenario(client,{scenarioKey:key,serviceOn:today,password:'different-password',now}));
   assert.equal(second.reused,true);assert.equal(second.periodId,first.periodId);

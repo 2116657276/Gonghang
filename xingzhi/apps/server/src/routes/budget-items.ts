@@ -9,7 +9,7 @@ import {
   offerView,
   type BudgetItemMutationResult,
 } from '@xingzhi/contracts';
-import { config } from '../config.js';
+import { isTrustedWriteRequest } from '../auth/guards.js';
 import { transaction } from '../db/client.js';
 import type { BudgetItemPort } from '../domain/budget-port.js';
 import { AppError } from '../domain/errors.js';
@@ -30,7 +30,7 @@ export const unavailableBudgetItemPort: BudgetItemPort = {
 };
 
 function writeContext(request: FastifyRequest) {
-  if (request.headers.origin !== config.webOrigin) {
+  if (!isTrustedWriteRequest(request)) {
     throw new AppError(403, 'RESOURCE_FORBIDDEN', '请求来源不被允许。');
   }
   const key = request.headers['idempotency-key'];

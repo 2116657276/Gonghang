@@ -1,4 +1,4 @@
-import { closePool } from './db/client.js';
+import { closePool, query } from './db/client.js';
 import { claimAgentWakeup } from './domain/agent-recovery.js';
 import { executeAgentRun, modelReady } from './domain/agent-runtime.js';
 import { tick } from './domain/worker-runtime.js';
@@ -11,6 +11,8 @@ async function run() {
   working = true;
   try {
     await tick();
+    await query(`INSERT INTO runtime_heartbeats(component,last_seen_at) VALUES('worker',now())
+      ON CONFLICT(component) DO UPDATE SET last_seen_at=EXCLUDED.last_seen_at`);
     if(!stopping && modelReady() && agentTasks.size<2){
       const wakeup=await claimAgentWakeup();
       if(wakeup){

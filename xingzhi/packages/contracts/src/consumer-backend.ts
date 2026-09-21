@@ -28,6 +28,31 @@ export const financeAccountRevocationInput = z.object({
 }).strict();
 export type FinanceAccountRevocationInput = z.infer<typeof financeAccountRevocationInput>;
 
+export const demoAccountReauthorizationInput = z.object({
+  expectedStatus: z.literal('revoked'),
+  acknowledgedDemoData: z.literal(true),
+}).strict();
+export type DemoAccountReauthorizationInput = z.infer<typeof demoAccountReauthorizationInput>;
+
+export const consumerPreferencesPatchInput = z.object({
+  defaultAccountId: z.string().uuid().nullable().optional(),
+  notifications: z.object({
+    planning: z.boolean(),
+    orders: z.boolean(),
+    refunds: z.boolean(),
+  }).strict().optional(),
+}).strict().refine((value) => value.defaultAccountId !== undefined || value.notifications !== undefined, {
+  message: '至少需要修改一项偏好。',
+});
+export type ConsumerPreferencesPatchInput = z.infer<typeof consumerPreferencesPatchInput>;
+
+export const budgetPeriodCloseInput = z.object({
+  expectedPeriodVersion: version,
+  confirmedByUser: z.literal(true),
+  reason: z.string().trim().min(2).max(200),
+}).strict();
+export type BudgetPeriodCloseInput = z.infer<typeof budgetPeriodCloseInput>;
+
 export const offerQuote = z.object({
   quoteId: uuid,
   catalogItemId: uuid,

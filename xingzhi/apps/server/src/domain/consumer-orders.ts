@@ -166,9 +166,20 @@ export async function prepareConsumerPaymentHandoff(
     WHERE budget_period_id=$1 AND owner_id=$2 AND entity_id=$3 AND type=$4
     ORDER BY created_at LIMIT 1 FOR UPDATE`, [scope.periodId, ownerId, order.id, operationType])).rows[0];
   if (existing) {
+    if (order.environment === 'sandbox') {
+      if (order.provider !== 'alipay' || !sandboxReadiness().ready) {
+        throw new AppError(409, 'PROVIDER_RESULT_UNKNOWN', '支付宝沙箱付款交接尚未就绪。');
+      }
+      const handoff = createAlipayHandoff({ businessNumber: order.businessNumber,
+        amountMinor: order.amountMinor, subject: order.itemName });
+      await client.query('UPDATE payment_attempts SET handoff_ready_at=now() WHERE order_id=$1', [order.id]);
+      return { orderId: order.id, operationId: existing.id, environment: order.environment,
+        provider: order.provider, paymentStatus: order.paymentStatus, requiresUserAction: true,
+        handoffUrl: handoff.handoffUrl, expiresAt: handoff.expiresAt.toISOString(), reused: true };
+    }
     return { orderId: order.id, operationId: existing.id, environment: order.environment,
       provider: order.provider, paymentStatus: order.paymentStatus,
-      requiresUserAction: order.environment === 'sandbox', reused: true };
+      requiresUserAction: false, reused: true };
   }
   if (order.environment === 'simulation') {
     const operationId = await createOperationJob(client, { budgetPeriodId: scope.periodId,

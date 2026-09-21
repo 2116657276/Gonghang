@@ -523,7 +523,10 @@ test('Pi 变更确认至商户善后连续链：A 保留、B 分批退款、C �
     await pool.query("UPDATE agent_wakeups SET next_run_at=now()-interval '1 second' WHERE run_id=$1", [recovery.runId]);
     await claimAgentWakeup();
     let explained = 0;
-    for (let attempt = 0; attempt < 12; attempt++) {
+    // One completed payment/close/refund chain can enqueue more than twelve
+    // distinct fact notifications. Drain the bounded queue fully so the test
+    // does not leave the final legitimate wakeup unprocessed.
+    for (let attempt = 0; attempt < 40; attempt++) {
       const pending = await pool.query("SELECT 1 FROM agent_wakeups WHERE state IN ('pending','dispatched')");
       if (!pending.rowCount) break;
       await pool.query("UPDATE agent_wakeups SET next_run_at=now()-interval '1 second' WHERE state IN ('pending','dispatched')");
@@ -541,7 +544,8 @@ test('Pi 变更确认至商户善后连续链：A 保留、B 分批退款、C �
     }
     assert.ok(explained > 0);
     assert.equal((await pool.query("SELECT count(*)::int AS n FROM agent_wakeups WHERE state IN ('pending','dispatched')")).rows[0].n, 0);
-    assert.equal((await pool.query('SELECT count(*)::int AS n FROM manual_tasks WHERE plan_id=$1', [f.planId])).rows[0].n, 0);
+    const unexpectedTasks = (await pool.query('SELECT type,state,reason,operation_id FROM manual_tasks WHERE plan_id=$1', [f.planId])).rows;
+    assert.equal(unexpectedTasks.length, 0, JSON.stringify(unexpectedTasks));
     assert.equal((await pool.query('SELECT count(*)::int AS n FROM refund_batches WHERE cancellation_request_id=$1', [requests[0].id])).rows[0].n, 2);
     const refundOperationId = snapshot.cancellations[0].batches[1].operationId;
     const rechecked = await write(`/api/operations/${refundOperationId}/rechecks`, { reason: '消费者请求复核第二笔退款' });

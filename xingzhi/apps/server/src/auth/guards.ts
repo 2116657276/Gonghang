@@ -21,12 +21,18 @@ export function requireRole(request: FastifyRequest, reply: FastifyReply, role: 
 }
 
 export function requireSameOrigin(request: FastifyRequest, reply: FastifyReply): boolean {
-  const origin = request.headers.origin;
-  if (origin !== config.webOrigin) {
+  // Native miniapp requests authenticate with an explicit bearer token and are
+  // not exposed to browser cookie CSRF. Browser cookie writes still require the
+  // configured web origin.
+  if (!isTrustedWriteRequest(request)) {
     reply.code(403).send({ error: 'INVALID_ORIGIN', message: '请求来源不被允许。' });
     return false;
   }
   return true;
+}
+
+export function isTrustedWriteRequest(request: FastifyRequest): boolean {
+  return request.sessionTransport === 'bearer' || request.headers.origin === config.webOrigin;
 }
 
 export function idempotencyKey(request: FastifyRequest, reply: FastifyReply): string | undefined {

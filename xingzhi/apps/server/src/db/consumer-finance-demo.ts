@@ -27,26 +27,81 @@ export async function seedConsumerFinanceDemo(client: PoolClient, now = new Date
   monthEnd.setUTCDate(0);
   const monthEndText = monthEnd.toISOString().slice(0, 10);
   const ownerId = consumer.id;
-  const accountId = stableUuid(`${demoEmail}:debit`);
-  const snapshotId = stableUuid(`${demoEmail}:initial-observed-2000`);
-  const periodId = stableUuid(`${demoEmail}:${monthStart}:period`);
+
+  // A revoked authorization is immutable. Serialize this small fixture allocation so a
+  // later local seed can create a distinct demo authorization instead of reactivating it.
+  await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`xingzhi-a00:${ownerId}`]);
+  const existingAccounts = (await client.query<{
+    id: string; provider_account_ref: string; status: string;
+  }>(`SELECT id,provider_account_ref,status FROM finance_accounts
+      WHERE owner_id=$1 AND provider='demo' AND source='demo' AND account_type='debit'
+        AND (provider_account_ref='A00-DEMO-DEBIT'
+          OR provider_account_ref ~ '^A00-DEMO-DEBIT-R([2-9]|[1-9][0-9]+)$')
+      FOR UPDATE`, [ownerId])).rows;
+  const generationOf = (ref: string) => ref === 'A00-DEMO-DEBIT'
+    ? 1
+    : Number(ref.slice('A00-DEMO-DEBIT-R'.length));
+  // Only reuse an untouched fixture. A linked Demo account may already contain
+  // user edits, later snapshots, purchases or ledger facts; reusing it would
+  // make a new local seed depend on yesterday's state and can invalidate today's
+  // quotes. In that case allocate a new Demo generation without overwriting the
+  // existing history.
+  let reusable: (typeof existingAccounts)[number] | undefined;
+  const linkedNewestFirst = existingAccounts
+    .filter((account) => account.status === 'linked')
+    .sort((left, right) => generationOf(right.provider_account_ref) - generationOf(left.provider_account_ref));
+  for (const candidate of linkedNewestFirst) {
+    const candidateGeneration = generationOf(candidate.provider_account_ref);
+    const candidateIdentity = candidateGeneration === 1 ? '' : `:R${candidateGeneration}`;
+    const candidateSnapshotId = stableUuid(`${demoEmail}:initial-observed-2000${candidateIdentity}`);
+    const candidatePeriodId = stableUuid(`${demoEmail}:${monthStart}:period${candidateIdentity}`);
+    const pristine = (await client.query<{ ok: boolean }>(`SELECT
+      EXISTS (SELECT 1 FROM finance_account_snapshots s WHERE s.id=$2 AND s.account_id=$1
+        AND s.available_balance_minor=200000 AND s.fact_status='observed')
+      AND (SELECT count(*) FROM finance_account_snapshots WHERE account_id=$1)=1
+      AND NOT EXISTS (SELECT 1 FROM finance_ledger_entries WHERE account_id=$1)
+      AND EXISTS (SELECT 1 FROM budget_periods p WHERE p.id=$3 AND p.primary_account_id=$1
+        AND p.month_start=$4::date AND p.month_end=$5::date AND p.status='active'
+        AND p.savings_target_minor=50000)
+      AND (SELECT count(*) FROM budget_items WHERE period_id=$3)=3
+      AND EXISTS (SELECT 1 FROM budget_items WHERE period_id=$3 AND title='朋友聚餐'
+        AND planned_on=$6::date AND user_estimated_amount_minor=8000 AND status='planned')
+      AND NOT EXISTS (SELECT 1 FROM purchase_intents WHERE period_id=$3)
+      AND NOT EXISTS (SELECT 1 FROM orders WHERE budget_period_id=$3) AS ok`,
+    [candidate.id, candidateSnapshotId, candidatePeriodId, monthStart, monthEndText, today])).rows[0]?.ok;
+    if (pristine) { reusable = candidate; break; }
+  }
+  const generation = reusable
+    ? generationOf(reusable.provider_account_ref)
+    : Math.max(0, ...existingAccounts.map((account) => generationOf(account.provider_account_ref))) + 1;
+  const generationSuffix = generation === 1 ? '' : `-R${generation}`;
+  const identitySuffix = generation === 1 ? '' : `:R${generation}`;
+  const providerAccountRef = `A00-DEMO-DEBIT${generationSuffix}`;
+  const accountId = reusable?.id ?? stableUuid(`${demoEmail}:debit${identitySuffix}`);
+  const snapshotId = stableUuid(`${demoEmail}:initial-observed-2000${identitySuffix}`);
+  const periodId = stableUuid(`${demoEmail}:${monthStart}:period${identitySuffix}`);
 
   await client.query(`INSERT INTO finance_accounts
     (id,owner_id,provider,account_type,provider_account_ref,masked_identifier,display_name,source,authorized_at)
-    VALUES($1,$2,'demo','debit','A00-DEMO-DEBIT','****A00','行止 Demo 生活费账户','demo',$3)
-    ON CONFLICT (id) DO NOTHING`, [accountId, ownerId, now]);
-  const account = (await client.query<{ owner_id: string; status: string; source: string }>(
-    'SELECT owner_id,status,source FROM finance_accounts WHERE id=$1 FOR UPDATE', [accountId],
+    VALUES($1,$2,'demo','debit',$3,'****A00','行止 Demo 生活费账户','demo',$4)
+    ON CONFLICT (id) DO NOTHING`, [accountId, ownerId, providerAccountRef, now]);
+  const account = (await client.query<{
+    owner_id: string; provider: string; account_type: string; provider_account_ref: string;
+    status: string; source: string;
+  }>(`SELECT owner_id,provider,account_type,provider_account_ref,status,source
+      FROM finance_accounts WHERE id=$1 FOR UPDATE`, [accountId],
   )).rows[0];
-  if (!account || account.owner_id !== ownerId || account.source !== 'demo' || account.status !== 'linked') {
-    throw new Error('A00 Demo 账户缺失、归属不符或已撤回；不会重新激活。');
+  if (!account || account.owner_id !== ownerId || account.provider !== 'demo'
+    || account.account_type !== 'debit' || account.provider_account_ref !== providerAccountRef
+    || account.source !== 'demo' || account.status !== 'linked') {
+    throw new Error('A00 Demo 账户缺失、身份或归属不符；不会覆盖或重新激活。');
   }
 
   await client.query(`INSERT INTO finance_account_snapshots
     (id,account_id,available_balance_minor,current_balance_minor,as_of,covered_through_at,
       fact_status,source,provider_snapshot_ref)
-    VALUES($1,$2,200000,200000,$3,$3,'observed','demo','A00-INITIAL-2000')
-    ON CONFLICT (id) DO NOTHING`, [snapshotId, accountId, now]);
+    VALUES($1,$2,200000,200000,$3,$3,'observed','demo',$4)
+    ON CONFLICT (id) DO NOTHING`, [snapshotId, accountId, now, `A00-INITIAL-2000${generationSuffix}`]);
   const snapshot = (await client.query<{
     account_id: string; available_balance_minor: number | null; fact_status: string;
     covered_through_at: Date | null;
@@ -74,7 +129,7 @@ export async function seedConsumerFinanceDemo(client: PoolClient, now = new Date
     { code: 'flexible', title: '其他可调生活开支', kind: 'planned_spend', amount: 32000, priority: 'adjustable', day: monthEndText },
   ] as const;
   for (const item of items) {
-    const itemId = stableUuid(`${demoEmail}:${monthStart}:${item.code}`);
+    const itemId = stableUuid(`${demoEmail}:${monthStart}:${item.code}${identitySuffix}`);
     await client.query(`INSERT INTO budget_items
       (id,owner_id,period_id,account_id,kind,title,category_code,planned_on,
         user_estimated_amount_minor,priority)
@@ -100,7 +155,7 @@ export async function seedConsumerFinanceDemo(client: PoolClient, now = new Date
     ownerId, accountId, snapshotId, periodId, monthStart, monthEnd: monthEndText,
     confirmedCashMinor: 200000, savingsTargetMinor: 50000,
     essentialExpenseMinor: 90000, adjustablePlannedMinor: 40000,
-    dinnerItemId: stableUuid(`${demoEmail}:${monthStart}:dinner`), dinnerEstimatedMinor: 8000,
+    dinnerItemId: stableUuid(`${demoEmail}:${monthStart}:dinner${identitySuffix}`), dinnerEstimatedMinor: 8000,
     source: 'demo' as const,
   };
 }

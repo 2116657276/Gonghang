@@ -2,8 +2,8 @@ import { randomUUID } from 'node:crypto';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { PoolClient } from 'pg';
 import { z, ZodError } from 'zod';
-import { financeAccountRevocationInput, ledgerCategoryChangeInput } from '@xingzhi/contracts';
-import { config } from '../config.js';
+import { demoAccountReauthorizationInput, financeAccountRevocationInput, ledgerCategoryChangeInput } from '@xingzhi/contracts';
+import { isTrustedWriteRequest } from '../auth/guards.js';
 import { query, transaction } from '../db/client.js';
 import { AppError } from '../domain/errors.js';
 import { loadFinanceAccountFacts, type FinanceDb } from '../domain/finance-facts.js';
@@ -14,7 +14,7 @@ const accountPath = z.object({ id: z.string().uuid() }).strict();
 const ledgerPath = z.object({ id: z.string().uuid() }).strict();
 
 function writeKey(request: FastifyRequest) {
-  if (request.headers.origin !== config.webOrigin) {
+  if (!isTrustedWriteRequest(request)) {
     throw new AppError(403, 'RESOURCE_FORBIDDEN', '请求来源不被允许。');
   }
   const key = request.headers['idempotency-key'];
@@ -50,6 +50,8 @@ async function revokeAccount(client: PoolClient, ownerId: string, accountId: str
       RETURNING revoked_at AS "revokedAt",financial_version AS "financialVersion"`,
     [accountId, ownerId],
   )).rows[0]!;
+  await client.query('UPDATE consumer_preferences SET default_account_id=NULL,updated_at=now() WHERE owner_id=$1 AND default_account_id=$2',
+    [ownerId, accountId]);
   for (const period of periods) {
     await client.query(`INSERT INTO budget_events (owner_id,period_id,actor_id,type,data)
       VALUES($1,$2,$1,'finance_account_revoked',$3::jsonb)`, [
@@ -61,6 +63,33 @@ async function revokeAccount(client: PoolClient, ownerId: string, accountId: str
       financialVersion: Number(revoked.financialVersion), affectedPeriodIds: periods.map((period) => period.id) },
     meta: { financialVersion: Number(revoked.financialVersion) },
   };
+}
+
+async function reauthorizeDemoAccount(client: PoolClient, ownerId: string, accountId: string) {
+  const account = (await client.query<{ id: string; status: 'linked' | 'revoked'; source: string;
+    financialVersion: string }>(`SELECT id,status,source,financial_version AS "financialVersion"
+    FROM finance_accounts WHERE id=$1 AND owner_id=$2 FOR UPDATE`, [accountId, ownerId])).rows[0];
+  if (!account) throw new AppError(404, 'RESOURCE_FORBIDDEN', '未找到本人账户。');
+  if (account.source !== 'demo') {
+    throw new AppError(422, 'EXTERNAL_ACCOUNT_REAUTHORIZATION_REQUIRED', '真实账户需要通过银行授权流程重新连接。');
+  }
+  if (account.status === 'linked') return { data: { accountId, status: 'linked',
+    financialVersion: Number(account.financialVersion), reauthorizedAt: null, reused: true },
+  meta: { financialVersion: Number(account.financialVersion) } };
+  const saved = (await client.query<{ financialVersion: string; authorizedAt: Date }>(`UPDATE finance_accounts
+    SET status='linked',revoked_at=NULL,authorized_at=now() WHERE id=$1 AND owner_id=$2
+    RETURNING financial_version AS "financialVersion",authorized_at AS "authorizedAt"`, [accountId, ownerId])).rows[0]!;
+  await client.query(`INSERT INTO consumer_preferences(owner_id,default_account_id)
+    VALUES($1,$2) ON CONFLICT(owner_id) DO UPDATE SET
+      default_account_id=COALESCE(consumer_preferences.default_account_id,EXCLUDED.default_account_id),updated_at=now()`,
+  [ownerId, accountId]);
+  const periods = (await client.query<{ id: string }>('SELECT id FROM budget_periods WHERE owner_id=$1 AND primary_account_id=$2',
+    [ownerId, accountId])).rows;
+  for (const period of periods) await client.query(`INSERT INTO budget_events(owner_id,period_id,actor_id,type,data)
+    VALUES($1,$2,$1,'finance_demo_account_reauthorized',$3::jsonb)`, [ownerId, period.id,
+    JSON.stringify({ accountId, financialVersion: Number(saved.financialVersion) })]);
+  return { data: { accountId, status: 'linked', financialVersion: Number(saved.financialVersion),
+    reauthorizedAt: saved.authorizedAt.toISOString(), reused: false }, meta: { financialVersion: Number(saved.financialVersion) } };
 }
 
 export async function registerFinanceAccountApi(app: FastifyInstance, options: {
@@ -104,6 +133,14 @@ export async function registerFinanceAccountApi(app: FastifyInstance, options: {
       client, request.authUser!.id, `POST /api/finance/accounts/${id}/revocations`,
       key, input, () => revokeAccount(client, request.authUser!.id, id),
     ));
+  });
+  app.post('/api/finance/accounts/:id/demo-reauthorizations', async (request) => {
+    const { id } = accountPath.parse(request.params);
+    const input = demoAccountReauthorizationInput.parse(request.body);
+    const key = writeKey(request);
+    return runTransaction((client) => runIdempotent(client, request.authUser!.id,
+      `POST /api/finance/accounts/${id}/demo-reauthorizations`, key, input,
+      () => reauthorizeDemoAccount(client, request.authUser!.id, id)));
   });
   app.patch('/api/finance/ledger/:id/category', async (request) => {
     const { id } = ledgerPath.parse(request.params);

@@ -148,6 +148,29 @@ function parse<T>(schema: z.ZodType<T>, value: unknown): T {
   return result.data;
 }
 
+type LoginAccount = {
+  id: string;
+  email: string;
+  display_name: string;
+  role: 'consumer' | 'merchant_admin' | 'reviewer';
+  password_hash: string;
+};
+
+async function authenticateAccount(value: unknown): Promise<LoginAccount | undefined> {
+  const input = parse(loginInput, value);
+  const result = await query<LoginAccount>(
+    'SELECT id, email, display_name, role, password_hash FROM users WHERE email = $1',
+    [input.email.toLowerCase()],
+  );
+  const account = result.rows[0];
+  if (!account || !(await verifyPassword(input.password, account.password_hash))) return;
+  return account;
+}
+
+function publicUser(account: LoginAccount) {
+  return { id: account.id, email: account.email, displayName: account.display_name, role: account.role };
+}
+
 function requireWrite(request: FastifyRequest, reply: FastifyReply) {
   if (!requireSameOrigin(request, reply)) return;
   const user = requireUser(request, reply);
@@ -245,12 +268,8 @@ function buildEvidenceDocument(
 export async function registerApi(app: FastifyInstance) {
   app.post('/api/sessions', async (request, reply) => {
     if (!requireSameOrigin(request, reply)) return;
-    const input = parse(loginInput, request.body);
-    const result = await query<{ id: string; email: string; display_name: string; role: 'consumer' | 'merchant_admin' | 'reviewer'; password_hash: string }>(
-      'SELECT id, email, display_name, role, password_hash FROM users WHERE email = $1', [input.email.toLowerCase()],
-    );
-    const account = result.rows[0];
-    if (!account || !(await verifyPassword(input.password, account.password_hash))) {
+    const account = await authenticateAccount(request.body);
+    if (!account) {
       return reply.code(401).send({ error: 'INVALID_CREDENTIALS', message: '账号或密码不正确。' });
     }
     const session = await createSession(account.id);
@@ -261,7 +280,25 @@ export async function registerApi(app: FastifyInstance) {
       path: '/',
       expires: session.expiresAt,
     });
-    return { user: { id: account.id, email: account.email, displayName: account.display_name, role: account.role } };
+    reply.header('Cache-Control', 'no-store');
+    return { user: publicUser(account) };
+  });
+
+  app.post('/api/miniapp/sessions', async (request, reply) => {
+    const account = await authenticateAccount(request.body);
+    if (!account) {
+      return reply.code(401).send({ error: 'INVALID_CREDENTIALS', message: '账号或密码不正确。' });
+    }
+    const session = await createSession(account.id);
+    reply.header('Cache-Control', 'no-store');
+    return {
+      data: {
+        token: session.token,
+        expiresAt: session.expiresAt.toISOString(),
+        user: publicUser(account),
+      },
+      meta: {},
+    };
   });
 
   app.get('/api/session', async (request, reply) => {

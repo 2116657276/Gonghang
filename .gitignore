@@ -1,5 +1,6 @@
 # 依赖与构建产物
 node_modules/
+node_modules.codex-backup-*/
 .pnpm-store/
 dist/
 build/
@@ -47,5 +48,10 @@ output/
 
 # 临时缓存
 .cache/
+.swc/
 .tmp/
 tmp/
+*.tmp.ts
+
+# 微信开发者工具本机配置
+project.private.config.json

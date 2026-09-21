@@ -3,7 +3,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { PoolClient } from 'pg';
 import { ZodError } from 'zod';
 import { assessPurchaseInput } from '@xingzhi/contracts';
-import { config } from '../config.js';
+import { isTrustedWriteRequest } from '../auth/guards.js';
 import { transaction } from '../db/client.js';
 import { AppError } from '../domain/errors.js';
 import { runIdempotent } from '../domain/idempotency.js';
@@ -12,7 +12,7 @@ import { assessPurchasePreview } from '../domain/purchase-assessment.js';
 type TransactionRunner = <T>(run: (client: PoolClient) => Promise<T>) => Promise<T>;
 
 function writeKey(request: FastifyRequest) {
-  if (request.headers.origin !== config.webOrigin) {
+  if (!isTrustedWriteRequest(request)) {
     throw new AppError(403, 'RESOURCE_FORBIDDEN', '请求来源不被允许。');
   }
   const key = request.headers['idempotency-key'];

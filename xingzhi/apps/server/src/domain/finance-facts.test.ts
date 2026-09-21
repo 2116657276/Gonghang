@@ -53,7 +53,9 @@ test('A00 fixture repeats without changing historical facts; A01 restricts cash 
     assert.equal((await app.inject({ url: '/api/finance/accounts', headers: { 'x-test-user': 'reviewer' } })).statusCode, 403);
     const ownerList = await app.inject({ url: '/api/finance/accounts', headers: { 'x-test-user': 'owner' } });
     assert.equal(ownerList.statusCode, 200);
-    assert.equal(ownerList.json().data.accounts[0].account.accountId, fixture.accountId);
+    assert.ok(ownerList.json().data.accounts.some(
+      (row: { account: { accountId: string } }) => row.account.accountId === fixture.accountId,
+    ));
     const otherList = await app.inject({ url: '/api/finance/accounts', headers: { 'x-test-user': 'other' } });
     assert.equal(otherList.statusCode, 200);
     assert.ok(!otherList.json().data.accounts.some((row: { account: { accountId: string } }) => row.account.accountId === fixture.accountId));
@@ -195,6 +197,31 @@ test('A00 fixture repeats without changing historical facts; A01 restricts cash 
     assert.equal(after.latestSnapshot?.snapshotId, fixture.snapshotId);
     await assert.rejects(readExecutionCashBasis(client, fixture.ownerId, fixture.accountId),
       (error: { code?: string }) => error.code === 'FINANCE_SCOPE_REVOKED');
+    await client.query('SAVEPOINT demo_reauthorization');
+    const reauthorized = await app.inject({ method: 'POST',
+      url: `/api/finance/accounts/${fixture.accountId}/demo-reauthorizations`,
+      headers: { origin: config.webOrigin, 'idempotency-key': 'a01-reauthorize-0001', 'x-test-user': 'owner' },
+      payload: { expectedStatus: 'revoked', acknowledgedDemoData: true } });
+    assert.equal(reauthorized.statusCode, 200);
+    assert.equal(reauthorized.json().data.status, 'linked');
+    assert.equal(reauthorized.json().data.financialVersion, revoked.json().data.financialVersion + 1);
+    assert.equal((await client.query<{ status: string }>(
+      'SELECT status FROM finance_accounts WHERE id=$1', [fixture.accountId])).rows[0]!.status, 'linked');
+    assert.equal(Number((await client.query<{ count: string }>(`SELECT count(*) FROM budget_events
+      WHERE period_id=$1 AND type='finance_demo_account_reauthorized'`, [fixture.periodId])).rows[0]!.count), 1);
+    await client.query('ROLLBACK TO SAVEPOINT demo_reauthorization');
+    await client.query('RELEASE SAVEPOINT demo_reauthorization');
+    const replacement = await seedConsumerFinanceDemo(client);
+    assert.notEqual(replacement.accountId, fixture.accountId);
+    assert.notEqual(replacement.snapshotId, fixture.snapshotId);
+    assert.notEqual(replacement.periodId, fixture.periodId);
+    assert.equal((await client.query<{ status: string }>(
+      'SELECT status FROM finance_accounts WHERE id=$1', [fixture.accountId],
+    )).rows[0]!.status, 'revoked');
+    assert.equal((await client.query<{ status: string }>(
+      'SELECT status FROM finance_accounts WHERE id=$1', [replacement.accountId],
+    )).rows[0]!.status, 'linked');
+    assert.deepEqual(await seedConsumerFinanceDemo(client), replacement);
   } finally {
     await app.close();
     await client.query('ROLLBACK');
