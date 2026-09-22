@@ -4,6 +4,7 @@ import { errorMessage } from '@/lib/errors';
 import type { BudgetPeriod, ConsumerPreferences, FinanceAccountFacts, User } from '@/lib/types';
 
 export function useOverview() {
+  let loadSequence = 0;
   const loading = ref(true);
   const error = ref('');
   const user = ref<User | null>(null);
@@ -15,18 +16,21 @@ export function useOverview() {
   const currentPeriod = computed(() => periods.value.find(item => item.period.status === 'active') ?? periods.value[0] ?? null);
 
   async function load() {
+    const sequence = ++loadSequence;
     loading.value = true; error.value = '';
     try {
       const [session, accountResult, periodResult, preferenceResult] = await Promise.all([api.session(), api.accounts(), api.periods(), api.preferences()]);
+      if (sequence !== loadSequence) return;
       user.value = session.user;
       if (session.user.role !== 'consumer') { error.value = '当前账号不是消费者账号。'; return; }
       accounts.value = accountResult.data.accounts;
       periods.value = periodResult.data.periods;
       preferences.value = preferenceResult.data;
     } catch (reason) {
+      if (sequence !== loadSequence) return;
       if (reason instanceof ApiError && reason.status === 401) return goLogin();
       error.value = errorMessage(reason);
-    } finally { loading.value = false; }
+    } finally { if (sequence === loadSequence) loading.value = false; }
   }
   return { loading, error, user, accounts, periods, preferences, primaryAccount, currentPeriod, load };
 }

@@ -192,10 +192,12 @@ if ($BackendOnly) {
 }
 
 Write-Step "启动行止（Server / Worker / 消费者端 / 管理端 / 微信小程序编译）"
+$weappApiBase = if ($env:TARO_APP_API_BASE) { ($env:TARO_APP_API_BASE).TrimEnd('/') } else { "http://127.0.0.1:8877" }
 Write-Host "消费者端: http://localhost:5173" -ForegroundColor Green
 Write-Host "商户/审核端: http://localhost:5174" -ForegroundColor Green
 Write-Host "后端地址: http://localhost:8877" -ForegroundColor Green
 Write-Host "微信产物: xingzhi\apps\miniapp\dist\weapp" -ForegroundColor Green
+Write-Host "微信 API: $weappApiBase" -ForegroundColor Green
 Write-Host "测试账号: consumer-a@xingzhi.local" -ForegroundColor Green
 Write-Host "按 Ctrl+C 停止全部服务。" -ForegroundColor Yellow
 
@@ -229,7 +231,7 @@ $workerCommand = "pnpm --dir `"$serverDir`" worker"
 $miniappCommand = "pnpm --dir `"$miniappDir`" dev:h5"
 $weappCommand = "pnpm --dir `"$miniappDir`" dev:weapp"
 $adminWebCommand = "pnpm --dir `"$adminWebDir`" dev"
-$env:TARO_APP_API_BASE = "http://127.0.0.1:8877"
+$env:TARO_APP_API_BASE = $weappApiBase
 
 & $concurrentlyCommand `
     --names "server,worker,h5,admin,weapp" `

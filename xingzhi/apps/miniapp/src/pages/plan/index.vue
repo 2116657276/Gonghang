@@ -96,7 +96,7 @@ function askAi() { void Taro.switchTab({ url: '/pages/ai/index' }); }
     </template>
   </PageShell>
 
-  <BottomSheet :model-value="impactOpen" title="本月资金影响" description="摘要来自当前周期的服务端事实。" primary-text="查看完整分析" @update:model-value="impactOpen=$event" @primary="impactOpen=false;openCurrentPeriod()">
+  <BottomSheet above-tab-bar :model-value="impactOpen" title="本月资金影响" description="摘要来自当前周期的服务端事实。" primary-text="查看完整分析" @update:model-value="impactOpen=$event" @primary="impactOpen=false;openCurrentPeriod()">
     <FactRow label="保留目标" :value="yuan(overview.currentPeriod.value?.basis.savingsTargetMinor)"/>
     <FactRow label="必要安排" :value="yuan(overview.currentPeriod.value?.basis.essentialRemainingMinor)"/>
     <FactRow label="可调计划" :value="yuan(overview.currentPeriod.value?.basis.adjustablePlannedMinor)"/>
@@ -105,7 +105,7 @@ function askAi() { void Taro.switchTab({ url: '/pages/ai/index' }); }
     <FactRow label="当前结论" :value="fundingLabel(currentStatus)"/>
   </BottomSheet>
 
-  <BottomSheet :model-value="selected!==null" :title="selected?.item.title??'计划详情'" description="这是当前计划与周期资金状态的快速摘要。" primary-text="查看计划详情" @update:model-value="value=>{if(!value)selected=null}" @primary="openSelectedDetail">
+  <BottomSheet above-tab-bar :model-value="selected!==null" :title="selected?.item.title??'计划详情'" description="这是当前计划与周期资金状态的快速摘要。" primary-text="查看计划详情" @update:model-value="value=>{if(!value)selected=null}" @primary="openSelectedDetail">
     <template v-if="selected"><FactRow label="计划金额" :value="yuan(selected.item.userEstimatedAmountMinor)" emphasis/><FactRow label="计划日期" :value="shortDate(selected.item.plannedOn)"/><FactRow label="安排属性" :value="selected.item.priority==='required'?'必须保留':'可以调整'"/><FactRow label="计划状态" :value="selected.item.status==='committed'?'已形成承诺':selected.group==='draft'?'草稿':'计划中'"/><FactRow label="周期资金结论" :value="fundingLabel(selected.period.forecast.status)"/></template>
   </BottomSheet>
 </template>

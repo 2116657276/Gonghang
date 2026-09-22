@@ -64,3 +64,29 @@ test('F2 account-only scenario creates finance facts without a budget and never 
   assert.equal(repeated.periodId, null);
   await assert.rejects(seed({ ...input, password: 'x', mode: 'complete' }), /不能改写/);
 });
+
+test('D1 complete scenarios bind one merchant and reviewer, with separate automatic and manual branches', async () => {
+  const merchantId = randomUUID(); const reviewerId = randomUUID();
+  await pool.query(`INSERT INTO users(id,email,display_name,role,password_hash) VALUES
+    ($1,'merchant@xingzhi.local','测试商户','merchant_admin','disabled'),
+    ($2,'reviewer@xingzhi.local','测试审核者','reviewer','disabled')`, [merchantId, reviewerId]);
+  const now = new Date();
+  const serviceOn = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).format(now);
+  const automatic = await seed({ scenarioKey: `auto-${randomUUID().replaceAll('-', '')}`,
+    serviceOn, password: 'test-password', now, mode: 'complete', aftercareMode: 'automatic' });
+  assert.equal(automatic.merchantId, merchantId); assert.equal(automatic.reviewerId, reviewerId);
+  assert.ok(automatic.catalogItemId); assert.ok(automatic.quoteId);
+  const manualInput = { scenarioKey: `manual-${randomUUID().replaceAll('-', '')}`,
+    serviceOn, password: 'test-password', now, mode: 'complete' as const,
+    aftercareMode: 'merchant-review' as const };
+  const manual = await seed(manualInput);
+  assert.equal(manual.merchantId, merchantId); assert.equal(manual.reviewerId, reviewerId);
+  assert.equal((await pool.query('SELECT cancellation_rule FROM catalog_items WHERE id=$1',
+    [manual.catalogItemId])).rows[0].cancellation_rule, 'delay');
+  assert.equal(Number((await pool.query(`SELECT count(*) FROM budget_review_scopes
+    WHERE reviewer_id=$1 AND period_id=$2`, [reviewerId, manual.periodId])).rows[0].count), 1);
+  const replay = await seed({ ...manualInput, password: 'different-password' });
+  assert.equal(replay.reused, true); assert.equal(replay.quoteId, manual.quoteId);
+});

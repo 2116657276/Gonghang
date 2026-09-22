@@ -11,6 +11,8 @@ import { registerBudgetAdjustmentApi } from './routes/budget-adjustments.js';
 import { registerConsumerAftercareApi } from './routes/consumer-aftercare.js';
 import { registerConsumerPreferencesApi } from './routes/consumer-preferences.js';
 import { registerRuntimeStatusApi } from './routes/runtime-status.js';
+import { registerMerchantConsumerApi } from './routes/merchant-consumer.js';
+import { registerBudgetReviewApi } from './routes/budget-review.js';
 import cookie from '@fastify/cookie';
 import cors from '@fastify/cors';
 import { ZodError } from 'zod';
@@ -77,6 +79,8 @@ await app.register(registerBudgetAdjustmentApi);
 await app.register(registerConsumerAftercareApi);
 await app.register(registerConsumerPreferencesApi);
 await app.register(registerRuntimeStatusApi);
+await app.register(registerMerchantConsumerApi);
+await app.register(registerBudgetReviewApi);
 await app.register(registerBudgetItemApi, {
   budgetItemPort: options.budgetItemPort ?? { applyBudgetItemChange, cancelBudgetItem },
 });

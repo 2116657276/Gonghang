@@ -3,7 +3,10 @@ import type { MerchantCancellation, RefundBatch } from '../lib/types';
 import { dateTime, yuan } from '../lib/api';
 import StatusPill from './StatusPill.vue';
 
-const props = defineProps<{ cancellations: MerchantCancellation[]; batches: Record<string, RefundBatch[]>; busy?: boolean }>();
+const props = withDefaults(defineProps<{ cancellations: MerchantCancellation[]; batches: Record<string, RefundBatch[]>;
+  busy?: boolean; title?: string; eyebrow?: string; emptyText?: string }>(), {
+  title: '处理队列', eyebrow: '取消与退款', emptyText: '目前没有消费者提交的取消申请。',
+});
 const emit = defineEmits<{ decide: [id: string, decision: 'approve' | 'reject']; schedule: [id: string]; recheck: [operationId: string] }>();
 
 function remaining(item: MerchantCancellation) {
@@ -19,7 +22,7 @@ function expectedDecision(item: MerchantCancellation) {
 
 <template>
   <section class="ledger-section" aria-labelledby="cancellation-title">
-    <div class="section-title"><div><p class="eyebrow">取消与退款</p><h2 id="cancellation-title">处理队列</h2></div></div>
+    <div class="section-title"><div><p class="eyebrow">{{ eyebrow }}</p><h2 id="cancellation-title">{{ title }}</h2></div></div>
     <div v-if="cancellations.length" class="cancellation-list">
       <article v-for="item in cancellations" :key="item.id" class="cancellation-card">
         <header>
@@ -45,6 +48,6 @@ function expectedDecision(item: MerchantCancellation) {
         </div>
       </article>
     </div>
-    <p v-else class="muted">目前没有消费者提交的取消申请。</p>
+    <p v-else class="muted">{{ emptyText }}</p>
   </section>
 </template>

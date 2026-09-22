@@ -30,7 +30,13 @@ async function load() {
 async function openCashier() {
   const url = handoff.value?.handoffUrl;
   if (!url || expired.value) return;
-  if (isH5Runtime && typeof window !== 'undefined') { window.location.assign(url); return; }
+  if (isH5Runtime && typeof window !== 'undefined') {
+    const cashier = window.open(url, '_blank', 'noopener,noreferrer');
+    if (cashier) return;
+    await Taro.setClipboardData({ data: url });
+    await Taro.showModal({ title: '浏览器阻止了新窗口', content: '收银台地址已复制。请在新标签页打开，完成后回到当前行止页面主动查单。', showCancel: false });
+    return;
+  }
   await Taro.setClipboardData({ data: url });
   await Taro.showModal({ title: '收银台地址已复制', content: '微信小程序不能直接跳转支付宝网页，请在系统浏览器中打开复制的地址。完成后回到行止主动核对结果。', showCancel: false });
 }
@@ -54,7 +60,7 @@ useLoad(options => { orderId.value = options.orderId ?? ''; void load(); });
       <button v-if="handoff.handoffUrl" class="primary-button full" :disabled="expired" @tap="openCashier">{{ expired?'交接已过期，请返回重试':'打开支付宝沙箱收银台' }}</button>
       <button v-if="handoff.environment==='sandbox'" class="secondary-button full" :loading="checking" @tap="verify">{{ checking?'正在核对…':'我已完成操作，主动查单' }}</button>
       <button v-else class="primary-button full" @tap="Taro.redirectTo({url:`/pages/operation/detail?id=${handoff.operationId}&orderId=${orderId}`})">查看处理进度</button>
-      <SectionCard v-if="recheck" class="result"><view class="row-between"><text class="title">查单结果</text><StatusBadge :label="recheck.paymentStatus==='paid'?'已确认付款':recheck.paymentStatus==='closed'?'交易已关闭':recheck.paymentStatus==='unknown'?'结果待核对':'仍待付款'" :tone="recheck.paymentStatus==='paid'?'success':recheck.paymentStatus==='unknown'?'warning':'info'"/></view><FactRow label="结果来源" :value="recheck.source"/><FactRow v-if="recheck.providerStatus" label="渠道状态" :value="recheck.providerStatus"/><button class="primary-button full" @tap="Taro.redirectTo({url:`/pages/order/detail?id=${orderId}`})">返回订单详情</button></SectionCard>
+      <SectionCard v-if="recheck" class="result"><view class="row-between"><text class="title">查单结果</text><StatusBadge :label="recheck.paymentStatus==='paid'?'已确认付款':recheck.paymentStatus==='closed'?'交易已关闭':recheck.paymentStatus==='unknown'?'结果待核对':'仍待付款'" :tone="recheck.paymentStatus==='paid'?'success':recheck.paymentStatus==='unknown'?'warning':'info'"/></view><FactRow label="结果来源" :value="recheck.source"/><FactRow v-if="recheck.providerStatus" label="渠道状态" :value="recheck.providerStatus"/><FactRow v-if="recheck.retryAfterSeconds" label="再次查询" :value="`${recheck.retryAfterSeconds} 秒后可重试`"/><button class="primary-button full" @tap="Taro.redirectTo({url:`/pages/order/detail?id=${orderId}`})">返回订单详情</button></SectionCard>
       <view v-if="error" class="notice notice--error page-error">{{ error }}</view>
     </template>
   </PageShell>

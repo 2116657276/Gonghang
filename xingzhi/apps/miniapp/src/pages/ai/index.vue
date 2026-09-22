@@ -101,7 +101,7 @@ function confirmContext() { selectedPeriodId.value = pendingPeriodId.value; cont
     <view class="composer"><button class="composer__add" aria-label="选择计划上下文" :disabled="sending" @tap="openContext">＋</button><textarea v-model="input" :disabled="sending" :maxlength="4000" auto-height placeholder="问问行止……"/><button class="send-button" :disabled="sending||!input.trim()" @tap="send()">{{ sending?'…':'↑' }}</button></view>
   </PageShell>
 
-  <BottomSheet :model-value="contextOpen" title="选择对话上下文" description="切换只影响后续提问，不会修改任何计划。" primary-text="使用这个上下文" @update:model-value="contextOpen=$event" @primary="confirmContext">
+  <BottomSheet above-tab-bar :model-value="contextOpen" title="选择对话上下文" description="切换只影响后续提问，不会修改任何计划。" primary-text="使用这个上下文" @update:model-value="contextOpen=$event" @primary="confirmContext">
     <view class="context-options">
       <button v-for="period in overview.periods.value" :key="period.period.periodId" class="context-option" :class="{'context-option--selected':pendingPeriodId===period.period.periodId}" @tap="pendingPeriodId=period.period.periodId"><view><text>{{ period.period.monthStart.slice(0,7).replace('-','年') }}月计划</text><text>{{ fundingLabel(period.forecast.status) }} · 最低 {{ yuan(period.basis.minimumProjectedCashMinor) }}</text></view><text>{{ pendingPeriodId===period.period.periodId?'✓':'○' }}</text></button>
       <button class="context-option" :class="{'context-option--selected':pendingPeriodId===null}" @tap="pendingPeriodId=null"><view><text>不带具体上下文</text><text>只讨论当前问题，不绑定预算周期</text></view><text>{{ pendingPeriodId===null?'✓':'○' }}</text></button>

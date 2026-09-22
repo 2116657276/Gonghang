@@ -17,16 +17,21 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
     throw reason;
   }
   if (response.status === 204) return undefined as T;
-  const body = await response.json() as T & { error?: string; message?: string };
+  const body = await response.json() as T & { error?: string | { code?: string; message?: string }; message?: string };
   if (!response.ok) {
     if (pending && response.status < 500 && response.status !== 408) completeIdempotentRequest(pending.storageId, pending.key);
-    const error = new Error(body.message ?? '操作没有完成。') as ApiError;
+    const nested = body.error && typeof body.error === 'object' ? body.error : undefined;
+    const error = new Error(nested?.message ?? body.message ?? '操作没有完成。') as ApiError;
     error.status = response.status;
-    error.code = body.error;
+    error.code = nested?.code ?? (typeof body.error === 'string' ? body.error : undefined);
     throw error;
   }
   if (pending) completeIdempotentRequest(pending.storageId, pending.key);
   return body;
+}
+
+export async function apiData<T>(path: string, init: RequestInit = {}): Promise<T> {
+  return (await api<{ data: T; meta: Record<string, unknown> }>(path, init)).data;
 }
 
 export const yuan = (minor: number) => new Intl.NumberFormat('zh-CN', {
@@ -37,10 +42,15 @@ export const dateTime = (value: string | Date) => new Intl.DateTimeFormat('zh-CN
   month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false,
 }).format(new Date(value));
 
-export async function requestOperationRecheck(operationId: string, reason: string): Promise<string> {
-  const result = await api<OperationRecheck>(`/operations/${operationId}/rechecks`, {
+export async function requestOperationRecheck(operationId: string, reason: string,
+  scope: 'legacy' | 'consumer' = 'legacy'): Promise<string> {
+  const path = scope === 'consumer'
+    ? `/merchant/consumer-operations/${operationId}/rechecks`
+    : `/operations/${operationId}/rechecks`;
+  const raw = await api<OperationRecheck | { data: OperationRecheck }>(path, {
     method: 'POST', body: JSON.stringify({ reason }),
   });
+  const result = 'data' in raw ? raw.data : raw;
   return result.manualTaskId
     ? '模拟交易复核已交由商户人工跟进；受理不代表退款成功。'
     : result.reused

@@ -76,8 +76,8 @@ function editReserveTarget() { const id=overview.currentPeriod.value?.period.per
     </template>
   </PageShell>
 
-  <BottomSheet :model-value="logoutOpen" title="退出登录" description="退出后将回到登录页，本地会话缓存会被清理。" secondary-text="取消" :primary-text="loggingOut?'正在退出…':'确认退出'" @update:model-value="logoutOpen=$event" @primary="logout"><view v-if="logoutError" class="notice notice--error">{{ logoutError }}</view><view v-else class="confirm-note">账户、计划和账目数据不会因退出登录而删除。</view></BottomSheet>
-  <BottomSheet :model-value="revokeOpen" title="撤回账户授权" description="撤回后，行止将无法继续基于当前账户判断新的资金影响和计划结果。" secondary-text="再想想" primary-text="查看撤回规则" @update:model-value="revokeOpen=$event" @primary="showRevokeRules"><view class="confirm-note confirm-note--warning">既有账户历史和相关业务事实仍会保留。真正撤回前需要在独立页面再次确认，本页不会直接执行。</view></BottomSheet>
+  <BottomSheet above-tab-bar :model-value="logoutOpen" title="退出登录" description="退出后将回到登录页，本地会话缓存会被清理。" secondary-text="取消" :primary-text="loggingOut?'正在退出…':'确认退出'" @update:model-value="logoutOpen=$event" @primary="logout"><view v-if="logoutError" class="notice notice--error">{{ logoutError }}</view><view v-else class="confirm-note">账户、计划和账目数据不会因退出登录而删除。</view></BottomSheet>
+  <BottomSheet above-tab-bar :model-value="revokeOpen" title="撤回账户授权" description="撤回后，行止将无法继续基于当前账户判断新的资金影响和计划结果。" secondary-text="再想想" primary-text="查看撤回规则" @update:model-value="revokeOpen=$event" @primary="showRevokeRules"><view class="confirm-note confirm-note--warning">既有账户历史和相关业务事实仍会保留。真正撤回前需要在独立页面再次确认，本页不会直接执行。</view></BottomSheet>
 </template>
 
 <style lang="scss">

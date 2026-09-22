@@ -1,6 +1,8 @@
 import { z } from 'zod';
 export * from './consumer-backend.js';
 export * from './consumer-ui.js';
+export * from './merchant-backend.js';
+export * from './budget-review-evidence.js';
 
 export const roles = ['consumer', 'merchant_admin', 'reviewer'] as const;
 export type Role = (typeof roles)[number];

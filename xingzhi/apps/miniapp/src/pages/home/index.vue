@@ -141,7 +141,7 @@ function openAccount() { const id=overview.primaryAccount.value?.account.account
     </template>
   </PageShell>
 
-  <BottomSheet :model-value="activeSheet!==null" :title="sheetCopy.title" :description="sheetCopy.description" :primary-text="sheetCopy.primary" @update:model-value="value=>{if(!value)activeSheet=null}" @primary="handleSheetPrimary">
+  <BottomSheet above-tab-bar :model-value="activeSheet!==null" :title="sheetCopy.title" :description="sheetCopy.description" :primary-text="sheetCopy.primary" @update:model-value="value=>{if(!value)activeSheet=null}" @primary="handleSheetPrimary">
     <template v-if="activeSheet==='pending'">
       <view v-if="pendingActions.length" class="sheet-list"><view v-for="item in pendingActions" :key="item.id" class="sheet-list__item" @tap="openPending(item)"><view><text>{{ item.title }}</text><text>{{item.detail}}</text></view><text v-if="item.amountMinor!==undefined" class="amount">{{ yuan(item.amountMinor) }}</text></view></view>
       <StatePanel v-else title="暂时没有待处理事项" detail="出现需要确认的变化时，会在这里提醒你。" />

@@ -567,7 +567,7 @@ test('API-06R 调用前限频与幂等缓存直接返回，不访问网关',asyn
     await pool.query("UPDATE payment_attempts SET query_not_before=now()+interval '15 seconds' WHERE order_id=$1",[f.order]);
     const session=await createSession(f.user);const key=randomUUID();
     const request=()=>app.inject({method:'POST',url:`/api/orders/${f.order}/payment-rechecks`,cookies:{xingzhi_session:session.token},headers:{origin:config.webOrigin,'idempotency-key':key},payload:{}});
-    const limited=await request();assert.equal(limited.statusCode,202);assert.equal(limited.json().retryAfterSeconds,15);
+    const limited=await request();assert.equal(limited.statusCode,202);assert.equal(limited.json().environment,'sandbox');assert.equal(limited.json().retryAfterSeconds,15);
     await pool.query('INSERT INTO idempotency_records(actor_id,route,idempotency_key,request_payload,response_payload) VALUES($1,$2,$3,$4,$5)',[f.user,`POST /orders/${f.order}/payment-rechecks`,key,{}, {orderId:f.order,cached:true}]);
     const cached=await request();assert.equal(cached.statusCode,200);assert.equal(cached.json().cached,true);
   } finally {config.alipaySandbox.gateway=saved;config.paymentMode='simulation';}
@@ -804,7 +804,7 @@ test('Pi HTTP 429 重试逐次记账，成功结算不释放缺失 usage 的旧�
   assert.equal(records[1].state,'settled'); assert.equal(Number(records[1].settled_micros),60);
 });
 
-async function m1ClosureFixture(rule: 'full_refund'|'two_batches' = 'full_refund') {
+async function m1ClosureFixture(rule: 'full_refund'|'two_batches'|'delay' = 'full_refund') {
   config.paymentMode='simulation';
   const ids={user:randomUUID(),merchant:randomUUID(),account:randomUUID(),snapshot:randomUUID(),
     period:randomUUID(),item:randomUUID(),catalog:randomUUID(),quote:randomUUID()};
@@ -877,6 +877,116 @@ async function m1ClosureFixture(rule: 'full_refund'|'two_batches' = 'full_refund
   };
   return {ids,user,today,monthEnd,versions,createIntent,createOrder};
 }
+
+test('D1 跨角色闭环：本人商户处理人工分支，退款只发一次，审核证据按分配读取',async()=>{
+  const f=await m1ClosureFixture('delay');const created=await f.createOrder();
+  const reviewer=randomUUID();const otherReviewer=randomUUID();const otherMerchant=randomUUID();
+  await pool.query(`INSERT INTO users(id,email,display_name,role,password_hash) VALUES
+    ($1,$2,'D1 审核者','reviewer','disabled'),($3,$4,'D1 其他审核者','reviewer','disabled'),
+    ($5,$6,'D1 其他商户','merchant_admin','disabled')`,[reviewer,`${reviewer}@test.local`,
+  otherReviewer,`${otherReviewer}@test.local`,otherMerchant,`${otherMerchant}@test.local`]);
+  await pool.query('INSERT INTO budget_review_scopes(reviewer_id,period_id) VALUES($1,$2)',[reviewer,f.ids.period]);
+  const consumerSession=await createSession(f.ids.user);const merchantSession=await createSession(f.ids.merchant);
+  const otherMerchantSession=await createSession(otherMerchant);const reviewerSession=await createSession(reviewer);
+  const otherReviewerSession=await createSession(otherReviewer);
+  const writeHeaders=()=>({origin:config.webOrigin,'idempotency-key':randomUUID()});
+  const consumerCookies={xingzhi_session:consumerSession.token};
+  const handoff=await app.inject({method:'POST',url:`/api/orders/${created.orderId}/payment-handoffs`,
+    cookies:consumerCookies,headers:writeHeaders(),payload:{}});
+  assert.equal(handoff.statusCode,200,handoff.body);
+  await pool.query("UPDATE jobs SET next_run_at=now()+interval '1 day' WHERE operation_id<>$1 AND state='pending'",
+    [handoff.json().operationId]);
+  const paymentJob=await claimNextJob();assert.ok(paymentJob);assert.equal(paymentJob.operation_id,handoff.json().operationId);
+  await processClaimedJob(paymentJob);
+  assert.equal((await pool.query('SELECT payment_status FROM orders WHERE id=$1',[created.orderId])).rows[0].payment_status,'paid');
+  await pool.query("UPDATE finance_accounts SET status='revoked',revoked_at=now() WHERE id=$1",[f.ids.account]);
+  const preview=await app.inject({method:'POST',url:`/api/orders/${created.orderId}/aftercare-previews`,
+    cookies:consumerCookies,headers:writeHeaders(),payload:{action:'cancel'}});
+  assert.equal(preview.statusCode,201,preview.body);
+  const previewData=preview.json().data;
+  const confirmation=await app.inject({method:'POST',url:`/api/orders/${created.orderId}/aftercare-confirmations`,
+    cookies:consumerCookies,headers:writeHeaders(),payload:{previewId:previewData.previewId,
+      acceptedFeeMinor:previewData.feeMinor,acceptedRefundMinor:previewData.expectedRefundMinor,confirmedByUser:true}});
+  assert.equal(confirmation.statusCode,202,confirmation.body);
+  const cancellation=(await pool.query('SELECT id FROM cancellation_requests WHERE order_id=$1',[created.orderId])).rows[0].id;
+  const merchantCookies={xingzhi_session:merchantSession.token};
+  const ownList=await app.inject({url:'/api/merchant/consumer-orders',cookies:merchantCookies});
+  assert.equal(ownList.statusCode,200,ownList.body);assert.ok(ownList.json().data.orders.some((row:{id:string})=>row.id===created.orderId));
+  const ownDetail=await app.inject({url:`/api/merchant/consumer-orders/${created.orderId}`,cookies:merchantCookies});
+  assert.equal(ownDetail.statusCode,200,ownDetail.body);
+  assert.equal(ownDetail.json().data.order.id,created.orderId);
+  assert.equal(ownDetail.json().data.payment.status,'paid');
+  const hidden=await app.inject({url:`/api/merchant/consumer-orders/${created.orderId}`,
+    cookies:{xingzhi_session:otherMerchantSession.token}});
+  assert.equal(hidden.statusCode,404,hidden.body);
+  const recheck=await app.inject({method:'POST',
+    url:`/api/merchant/consumer-operations/${handoff.json().operationId}/rechecks`,cookies:merchantCookies,
+    headers:writeHeaders(),payload:{reason:'按原付款业务号复核'}});
+  assert.equal(recheck.statusCode,202,recheck.body);assert.ok(recheck.json().data.manualTaskId);
+  const crossMerchantRecheck=await app.inject({method:'POST',
+    url:`/api/merchant/consumer-operations/${handoff.json().operationId}/rechecks`,
+    cookies:{xingzhi_session:otherMerchantSession.token},headers:writeHeaders(),payload:{reason:'尝试跨商户复核'}});
+  assert.equal(crossMerchantRecheck.statusCode,404,crossMerchantRecheck.body);
+  const tasks=await app.inject({url:'/api/merchant/consumer-manual-tasks',cookies:merchantCookies});
+  assert.ok(tasks.json().data.tasks.some((row:{orderId:string})=>row.orderId===created.orderId));
+  const decisionKey=randomUUID();const decisionRequest={method:'POST' as const,
+    url:`/api/merchant/consumer-cancellations/${cancellation}/decisions`,cookies:merchantCookies,
+    headers:{origin:config.webOrigin,'idempotency-key':decisionKey},payload:{decision:'approve',reason:'核对原订单后批准'}};
+  const decided=await app.inject(decisionRequest);assert.equal(decided.statusCode,200,decided.body);
+  const decidedReplay=await app.inject(decisionRequest);assert.deepEqual(decidedReplay.json(),decided.json());
+  const changedDecision=await app.inject({...decisionRequest,
+    payload:{decision:'approve',reason:'使用同一幂等键改写参数'}});
+  assert.equal(changedDecision.statusCode,409,changedDecision.body);
+  const scheduled=await app.inject({method:'POST',url:`/api/merchant/consumer-cancellations/${cancellation}/refund-batches`,
+    cookies:merchantCookies,headers:writeHeaders(),payload:{}});
+  assert.equal(scheduled.statusCode,202,scheduled.body);assert.equal(scheduled.json().data.batches.length,1);
+  const scheduledAgain=await app.inject({method:'POST',url:`/api/merchant/consumer-cancellations/${cancellation}/refund-batches`,
+    cookies:merchantCookies,headers:writeHeaders(),payload:{}});
+  assert.equal(scheduledAgain.statusCode,202,scheduledAgain.body);assert.equal(scheduledAgain.json().data.reused,true);
+  assert.equal(Number((await pool.query('SELECT count(*) FROM refund_batches WHERE cancellation_request_id=$1',[cancellation])).rows[0].count),1);
+  const refundOperation=scheduled.json().data.batches[0].operationId;
+  await pool.query("UPDATE jobs SET next_run_at=now()+interval '1 day' WHERE operation_id<>$1 AND state='pending'",[refundOperation]);
+  const refundJob=await claimNextJob();assert.ok(refundJob);assert.equal(refundJob.operation_id,refundOperation);
+  await processClaimedJob(refundJob);
+  assert.equal((await pool.query('SELECT refunded_minor FROM orders WHERE id=$1',[created.orderId])).rows[0].refunded_minor,9900);
+  const unassigned=await app.inject({url:`/api/reviewer/budget-periods/${f.ids.period}`,
+    cookies:{xingzhi_session:otherReviewerSession.token}});
+  assert.equal(unassigned.statusCode,404,unassigned.body);
+  const evidence=await app.inject({url:`/api/reviewer/budget-periods/${f.ids.period}`,
+    cookies:{xingzhi_session:reviewerSession.token}});
+  assert.equal(evidence.statusCode,200,evidence.body);
+  const evidenceData=evidence.json().data as {orders:Array<{orderId:string;merchantAssignment:string}>;
+    moneyEvents:Array<{eventType:string}>;operations:Array<{
+      operationId:string;type:string;businessNumberRef:string|null}>};
+  assert.ok(evidenceData.orders.some(row=>
+    row.orderId===created.orderId&&row.merchantAssignment==='captured'));
+  assert.ok(evidenceData.moneyEvents.some(row=>row.eventType==='refund_posted'));
+  const paymentBusiness=(await pool.query('SELECT business_number FROM payment_attempts WHERE order_id=$1',
+    [created.orderId])).rows[0].business_number as string;
+  const refundBusiness=(await pool.query('SELECT business_number FROM refund_batches WHERE id=$1',
+    [scheduled.json().data.batches[0].id])).rows[0].business_number as string;
+  const refundEvidence=evidenceData.operations.find(row=>row.operationId===refundOperation);
+  assert.ok(refundEvidence);
+  assert.equal(refundEvidence.businessNumberRef,
+    `${refundBusiness.slice(0,4)}…${refundBusiness.slice(-4)}`);
+  assert.notEqual(refundEvidence.businessNumberRef,
+    `${paymentBusiness.slice(0,4)}…${paymentBusiness.slice(-4)}`);
+  const paymentEvidence=evidenceData.operations.find(row=>row.operationId===handoff.json().operationId);
+  assert.ok(paymentEvidence);
+  assert.equal(paymentEvidence.businessNumberRef,
+    `${paymentBusiness.slice(0,4)}…${paymentBusiness.slice(-4)}`);
+  const reviewEvidence=evidenceData.operations.find(row=>row.type==='merchant_cancellation_review');
+  assert.ok(reviewEvidence);
+  assert.equal(reviewEvidence.businessNumberRef,null);
+  const exported=await app.inject({method:'POST',url:`/api/reviewer/budget-periods/${f.ids.period}/evidence-exports`,
+    cookies:{xingzhi_session:reviewerSession.token},headers:writeHeaders(),payload:{format:'json'}});
+  assert.equal(exported.statusCode,201,exported.body);
+  const downloaded=await app.inject({url:exported.json().data.downloadUrl,cookies:{xingzhi_session:reviewerSession.token}});
+  assert.equal(downloaded.statusCode,200,downloaded.body);assert.equal(downloaded.json().period.periodId,f.ids.period);
+  const crossReviewerDownload=await app.inject({url:exported.json().data.downloadUrl,
+    cookies:{xingzhi_session:otherReviewerSession.token}});
+  assert.equal(crossReviewerDownload.statusCode,404,crossReviewerDownload.body);
+});
 
 test('M1 收口 1：过期意图自动释放，主动放弃后可重购、编辑和取消，确认竞争只有一个结果',async()=>{
   const f=await m1ClosureFixture();const session=await createSession(f.ids.user);

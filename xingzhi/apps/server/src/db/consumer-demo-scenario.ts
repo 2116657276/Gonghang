@@ -16,22 +16,33 @@ function shanghaiToday(now = new Date()) {
 export async function seedConsumerDemoScenario(client: PoolClient, input: {
   scenarioKey: string; serviceOn: string; password: string; now?: Date;
   mode?: 'complete' | 'account-only';
+  aftercareMode?: 'automatic' | 'merchant-review';
 }) {
   if (!/^[a-z0-9][a-z0-9_-]{2,79}$/.test(input.scenarioKey)) {
     throw new Error('场景标识只能包含小写字母、数字、下划线和连字符。');
   }
   const now = input.now ?? new Date();
   const mode = input.mode ?? 'complete';
+  const aftercareMode = input.aftercareMode ?? 'automatic';
+  if (mode === 'account-only' && aftercareMode !== 'automatic') {
+    throw new Error('仅完整场景可以准备商户人工处理分支。');
+  }
   if (input.serviceOn !== shanghaiToday(now)) throw new Error('隔离 Demo 服务日期必须是当前上海日期。');
   const existing = (await client.query<{
     ownerId: string; accountId: string; periodId: string | null; mode: 'complete' | 'account-only';
-    serviceOn: string; createdAt: Date;
+    serviceOn: string; aftercareMode: 'automatic' | 'merchant-review'; merchantId: string | null;
+    reviewerId: string | null; catalogItemId: string | null; quoteId: string | null; createdAt: Date;
   }>(`SELECT owner_id AS "ownerId",account_id AS "accountId",period_id AS "periodId",
-      mode,to_char(service_on,'YYYY-MM-DD') AS "serviceOn",created_at AS "createdAt"
+      mode,to_char(service_on,'YYYY-MM-DD') AS "serviceOn",aftercare_mode AS "aftercareMode",
+      merchant_id AS "merchantId",reviewer_id AS "reviewerId",catalog_item_id AS "catalogItemId",
+      quote_id AS "quoteId",created_at AS "createdAt"
     FROM consumer_demo_scenarios WHERE scenario_key=$1 FOR UPDATE`, [input.scenarioKey])).rows[0];
   if (existing) {
     if (existing.mode !== mode) {
       throw new Error(`场景 ${input.scenarioKey} 已按 ${existing.mode} 模式创建，不能改写为 ${mode}。`);
+    }
+    if (existing.aftercareMode !== aftercareMode) {
+      throw new Error(`场景 ${input.scenarioKey} 已按 ${existing.aftercareMode} 售后分支创建，不能改写为 ${aftercareMode}。`);
     }
     return { scenarioKey: input.scenarioKey, ...existing,
       createdAt: existing.createdAt.toISOString(), reused: true };
@@ -96,14 +107,63 @@ export async function seedConsumerDemoScenario(client: PoolClient, input: {
     }
     await seedConsumerCatalog(client, input.serviceOn);
   }
+  let merchantId: string | null = null; let reviewerId: string | null = null;
+  let catalogItemId: string | null = null; let quoteId: string | null = null;
+  if (mode === 'complete') {
+    merchantId = (await client.query<{ id: string }>(`SELECT id FROM users
+      WHERE role='merchant_admin' ORDER BY created_at,id LIMIT 1`)).rows[0]?.id ?? null;
+    reviewerId = (await client.query<{ id: string }>(`SELECT id FROM users
+      WHERE role='reviewer' ORDER BY created_at,id LIMIT 1`)).rows[0]?.id ?? null;
+    if (!merchantId || !reviewerId) throw new Error('请先运行基础种子，准备测试商户和审核者账号。');
+    if (aftercareMode === 'merchant-review') {
+      catalogItemId = stableUuid(`${input.scenarioKey}:manual-catalog`);
+      quoteId = stableUuid(`${input.scenarioKey}:manual-quote`);
+      const code = `D1-MANUAL-${input.scenarioKey}`;
+      await client.query(`INSERT INTO catalog_items
+        (id,merchant_id,code,name,kind,description,price_minor,rule_label,cancellation_fee_minor,
+         cancellation_rule,simulation_mode,close_simulation_mode,refund_simulation_mode,
+         category_code,location_label,tags,purchase_mode)
+        VALUES($1,$2,$3,'Demo 人工售后晚餐','food','用于跨角色演示的预登记测试商品。',9900,
+          '取消后由本人商户审核；批准后按原确认金额退款',0,'delay','SUCCESS','SUCCESS','SUCCESS',
+          'food','测试商圈',ARRAY['demo','merchant-review'],'orderable') ON CONFLICT(code) DO NOTHING`,
+      [catalogItemId, merchantId, code]);
+      const stored = (await client.query<{ id: string }>('SELECT id FROM catalog_items WHERE code=$1', [code])).rows[0]!;
+      catalogItemId = stored.id;
+      await client.query(`INSERT INTO offer_quotes
+        (id,catalog_item_id,provider,quote_source,provider_quote_ref,quote_version,price_minor,
+         service_on,rule_version,rule_snapshot,valid_until)
+        SELECT $1,$2,'simulation','demo',$3,COALESCE(MAX(quote_version),0)+1,9900,$4::date,1,$5::jsonb,$6
+        FROM offer_quotes WHERE catalog_item_id=$2
+        ON CONFLICT(provider,provider_quote_ref) WHERE provider_quote_ref IS NOT NULL DO NOTHING`,
+      [quoteId, catalogItemId, `${code}:${input.serviceOn}`, input.serviceOn,
+        JSON.stringify({ cancellationRule: 'delay', cancellationFeeMinor: 0,
+          label: '取消后由本人商户审核；批准后按原确认金额退款' }),
+        new Date(`${input.serviceOn}T23:59:59+08:00`)]);
+      quoteId = (await client.query<{ id: string }>(`SELECT id FROM offer_quotes
+        WHERE provider='simulation' AND provider_quote_ref=$1`, [`${code}:${input.serviceOn}`])).rows[0]!.id;
+    } else {
+      const selected = (await client.query<{ catalogItemId: string; quoteId: string; merchantId: string }>(`
+        SELECT c.id AS "catalogItemId",q.id AS "quoteId",c.merchant_id AS "merchantId"
+        FROM catalog_items c JOIN offer_quotes q ON q.catalog_item_id=c.id
+        WHERE c.code='CONSUMER-DINNER-99' AND q.service_on=$1::date`, [input.serviceOn])).rows[0];
+      if (!selected) throw new Error('未能准备完整场景的自动退款商品。');
+      ({ catalogItemId, quoteId, merchantId } = selected);
+    }
+    await client.query(`INSERT INTO budget_review_scopes(reviewer_id,period_id)
+      VALUES($1,$2) ON CONFLICT DO NOTHING`, [reviewerId, periodId]);
+  }
   await client.query(`INSERT INTO consumer_demo_scenarios
-    (scenario_key,owner_id,account_id,period_id,service_on,mode) VALUES($1,$2,$3,$4,$5,$6)`,
-  [input.scenarioKey, ownerId, accountId, mode === 'complete' ? periodId : null, input.serviceOn, mode]);
+    (scenario_key,owner_id,account_id,period_id,service_on,mode,aftercare_mode,
+      merchant_id,reviewer_id,catalog_item_id,quote_id)
+    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+  [input.scenarioKey, ownerId, accountId, mode === 'complete' ? periodId : null, input.serviceOn, mode,
+    aftercareMode, merchantId, reviewerId, catalogItemId, quoteId]);
   return { scenarioKey: input.scenarioKey, ownerId, accountId,
     periodId: mode === 'complete' ? periodId : null, mode, serviceOn: input.serviceOn,
     snapshotAsOf: now.toISOString(),
     quoteValidThrough: mode === 'complete' ? `${input.serviceOn}T23:59:59+08:00` : null,
-    email, confirmedCashMinor: 200000, savingsTargetMinor: mode === 'complete' ? 50000 : null,
+    email, aftercareMode, merchantId, reviewerId, catalogItemId, quoteId,
+    confirmedCashMinor: 200000, savingsTargetMinor: mode === 'complete' ? 50000 : null,
     essentialAndRepaymentMinor: mode === 'complete' ? 90000 : null,
     adjustablePlannedMinor: mode === 'complete' ? 40000 : null,
     createdAt: now.toISOString(), reused: false };

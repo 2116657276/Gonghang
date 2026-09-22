@@ -4,14 +4,16 @@ import type { ManualTask } from '../lib/types';
 import { dateTime } from '../lib/api';
 import StatusPill from './StatusPill.vue';
 
-defineProps<{ tasks: ManualTask[]; busy?: boolean }>();
+withDefaults(defineProps<{ tasks: ManualTask[]; busy?: boolean; title?: string; eyebrow?: string }>(), {
+  title: '待复核任务', eyebrow: '人工责任',
+});
 const emit = defineEmits<{ claim: [id: string]; record: [id: string, note: string]; recheck: [operationId: string] }>();
 const notes = reactive<Record<string, string>>({});
 </script>
 
 <template>
   <section class="ledger-section" aria-labelledby="manual-task-title">
-    <div class="section-title"><div><p class="eyebrow">人工责任</p><h2 id="manual-task-title">待复核任务</h2></div></div>
+    <div class="section-title"><div><p class="eyebrow">{{ eyebrow }}</p><h2 id="manual-task-title">{{ title }}</h2></div></div>
     <div v-if="tasks.length" class="manual-task-list">
       <article v-for="task in tasks" :key="task.id" class="manual-task-card">
         <header><strong>{{ task.type }}</strong><StatusPill :value="task.state" /></header>

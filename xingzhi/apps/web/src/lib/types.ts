@@ -89,7 +89,8 @@ export type MerchantCatalogItem = {
 };
 
 export type MerchantCancellation = {
-  id: string; planId: string; orderId: string; itemName: string; amountMinor: number; paymentStatus: string; orderStatus: string;
+  id: string; scope?: 'legacy' | 'consumer'; planId: string | null; budgetPeriodId?: string | null;
+  orderId: string; itemName: string; amountMinor: number; paymentStatus: string; orderStatus: string;
   consumer: string; acceptedFeeMinor: number; acceptedRefundMinor: number; ruleVersion: number; rulePreset: string;
   status: string; decision: string | null; decisionReason: string | null; decidedAt: string | null;
   refundedMinor: number; pendingRefundMinor: number; batchCount: number; createdAt: string; updatedAt: string;
@@ -101,11 +102,60 @@ export type RefundBatch = {
 };
 
 export type ManualTask = {
-  id: string; type: string; state: string; planId: string; orderId: string | null; cancellationRequestId: string | null;
+  id: string; type: string; state: string; scope?: 'legacy' | 'consumer'; planId: string | null;
+  budgetPeriodId?: string | null; orderId: string | null; cancellationRequestId: string | null;
   refundBatchId: string | null; operationId: string | null; reason: string; nextAction: string; nextReviewAt: string;
   claimedBy: string | null; claimedAt: string | null; lastNote: string | null; createdAt: string; updatedAt: string;
 };
 
 export type OperationRecheck = {
   operationId: string; status: string; recheckOperationId?: string; manualTaskId?: string; reused?: boolean;
+};
+
+export type MerchantConsumerOrder = {
+  id: string; scope: 'consumer'; planId: null; budgetPeriodId: string; itemName: string;
+  amountMinor: number; refundedMinor: number; paymentStatus: string; status: string;
+  environment: 'simulation' | 'sandbox'; consumer: string; createdAt: string;
+};
+
+export type MerchantConsumerOrderDetail = {
+  order: MerchantConsumerOrder;
+  confirmation: { purchaseIntentId: string; confirmationId: null; quoteId: string;
+    financialVersion: number; periodVersion: number; quoteVersion: number;
+    acceptedAmountMinor: number; confirmedAt: string };
+  payment: { businessNumber: string; status: string; providerStatus: string | null; updatedAt: string } | null;
+  cancellations: MerchantCancellation[]; refunds: RefundBatch[];
+  operations: Array<{ operationId: string; type: string; state: string; attemptCount: number;
+    createdAt: string; updatedAt: string }>;
+  timeline: Array<{ type: string; referenceId: string; status: string; observedAt: string }>;
+};
+
+export type BudgetReviewSummary = {
+  periodId: string; monthStart: string; monthEnd: string; status: 'draft' | 'active' | 'closed';
+  periodVersion: number; savingsTargetMinor: number; accountSource: 'demo' | 'bank_api';
+  accountStatus: 'linked' | 'revoked'; updatedAt: string;
+};
+
+export type BudgetReviewEvidence = {
+  version: 1; generatedAt: string; period: BudgetReviewSummary;
+  orders: Array<{ orderId: string; purchaseIntentId: string; quoteId: string;
+    merchantAssignment: 'captured' | 'unresolved'; amountMinor: number; refundedMinor: number;
+    currency: 'CNY'; environment: 'simulation' | 'sandbox'; provider: 'simulation' | 'alipay';
+    status: string; paymentStatus: string; confirmedAt: string; financialVersion: number;
+    periodVersion: number; quoteVersion: number; createdAt: string; updatedAt: string }>;
+  moneyEvents: Array<{ eventId: string; orderId: string; eventType: string; amountMinor: number;
+    verificationState: 'unverified' | 'verified' | 'unknown'; source: 'demo' | 'bank_api';
+    ledgerEntryId: string | null; observedAt: string }>;
+  operations: Array<{ operationId: string; entityId: string; type: string; state: string;
+    attemptCount: number; businessNumberRef: string | null; idempotencyRecordRef: string | null;
+    createdAt: string; updatedAt: string }>;
+  timeline: Array<{ referenceId: string; type: string; observedAt: string; actorRole: string;
+    actorRef: string | null; orderId: string | null; operationId: string | null;
+    state: string | null; amountMinor: number | null; source: string | null }>;
+  missingEvidence: string[];
+};
+
+export type BudgetEvidenceExport = {
+  exportId: string; periodId: string; format: 'json' | 'html'; createdAt: string;
+  expiresAt: string; downloadUrl: string;
 };

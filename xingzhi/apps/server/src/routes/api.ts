@@ -534,6 +534,9 @@ export async function registerApi(app: FastifyInstance) {
       const row = result.rows[0];
       if (!row || row.owner_id !== context.user.id) notFound('未找到可复核的沙箱订单。');
       if (row.environment !== 'sandbox') throw new AppError(422, 'PAYMENT_RECHECK_UNAVAILABLE', '本地模拟订单不调用支付宝查单。');
+      if (!sandboxReadiness().ready) {
+        throw new AppError(409, 'PAYMENT_SANDBOX_NOT_READY', '支付宝沙箱查询配置尚未就绪。');
+      }
       return row;
     });
 
@@ -557,7 +560,8 @@ export async function registerApi(app: FastifyInstance) {
     });
     if (admission.cached) return admission.cached;
     if (!admission.allowed) return reply.code(202).send({ orderId, operationId: order.operation_id,
-      status: 'accepted', source: 'persisted', paymentStatus: order.payment_status, retryAfterSeconds: 15 });
+      environment: 'sandbox', status: 'accepted', source: 'persisted',
+      paymentStatus: order.payment_status, retryAfterSeconds: 15 });
 
     let observed;
     try {
