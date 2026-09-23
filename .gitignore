@@ -19,6 +19,13 @@ coverage/
 *.pfx
 *.crt
 *.cer
+*.p8
+*.jks
+*.keystore
+*.mobileprovision
+id_rsa
+id_ed25519
+id_ecdsa
 secrets/
 credentials/
 .local-secrets/

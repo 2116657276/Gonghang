@@ -1,5 +1,5 @@
 import type { PoolClient } from 'pg';
-import type { PlanningDraftItem } from '@xingzhi/contracts';
+import type { BudgetItemChangeInput, PlanningDraftItem } from '@xingzhi/contracts';
 import { AppError } from './errors.js';
 import { expireStalePurchaseIntents } from './purchase-intent-lifecycle.js';
 import { loadFinanceAccountFacts } from './finance-facts.js';
@@ -13,7 +13,8 @@ type PeriodRow = {
 };
 export type PlannedRow = {
   id: string; plannedOn: string; kind: 'expected_income' | 'essential_expense' | 'planned_spend';
-  status: 'planned' | 'committed'; estimatedMinor: string; priority?: 'required' | 'adjustable';
+  status: 'planned' | 'committed'; estimatedMinor: string; coveredMinor?: string;
+  priority?: 'required' | 'adjustable';
 };
 export type PlanningOptionChange = {
   budgetItemId: string; action: 'cancel' | 'revise';
@@ -87,13 +88,15 @@ export function buildCashflowEvents(input: {
     }
     if (orderItemIds.has(item.id)) continue; // Estimate is replaced by the order fact.
     if (input.replacement?.budgetItemId === item.id) continue;
+    const remaining = amount - safeMinor(item.coveredMinor ?? 0);
+    if (remaining < 0) reasonCodes.push('PLAN_ACTUAL_COVERAGE_MISMATCH');
     if (item.status === 'committed') {
       reasonCodes.push('COMMITTED_ITEM_WITHOUT_ORDER');
     }
-    if (item.plannedOn > input.endOn) continue;
+    if (item.plannedOn > input.endOn || remaining <= 0) continue;
     events.push({
       on: item.plannedOn < input.startOn ? input.startOn : item.plannedOn,
-      deltaMinor: -amount, kind: 'planned_expense', referenceId: item.id,
+      deltaMinor: -remaining, kind: 'planned_expense', referenceId: item.id,
     });
   }
   if (input.replacement) {
@@ -141,7 +144,9 @@ async function readPeriod(client: PoolClient, ownerId: string, periodId: string)
 async function readPlannedItems(client: PoolClient, ownerId: string, accountId: string, endOn: string) {
   return (await client.query<PlannedRow>(`SELECT i.id,
     to_char(i.planned_on,'YYYY-MM-DD') AS "plannedOn",i.kind,i.status,
-    i.user_estimated_amount_minor AS "estimatedMinor",i.priority
+    i.user_estimated_amount_minor AS "estimatedMinor",i.priority,
+    COALESCE((SELECT SUM(l.covered_minor) FROM budget_ledger_links l
+      WHERE l.item_id=i.id AND l.active),0)::text AS "coveredMinor"
     FROM budget_items i JOIN budget_periods p ON p.id=i.period_id AND p.owner_id=i.owner_id
     WHERE i.owner_id=$1 AND i.account_id=$2 AND p.status='active'
       AND i.status IN ('planned','committed') AND i.planned_on <= $3::date
@@ -171,6 +176,8 @@ export async function forecastBudgetCashflow(client: PoolClient, ownerId: string
   replacement?: { budgetItemId: string; quotedAmountMinor: number; quoteId: string };
   extraEvents?: CashflowEvent[];
   optionChanges?: PlanningOptionChange[];
+  excludedItemId?: string;
+  previewChange?: BudgetItemChangeInput;
 } = {}) {
   const now = options.now ?? new Date();
   const today = shanghaiToday(now);
@@ -217,6 +224,37 @@ export async function forecastBudgetCashflow(client: PoolClient, ownerId: string
       ['BUDGET_NECESSITIES_UNCONFIRMED']) };
   }
   const items = await readPlannedItems(client, ownerId, period.accountId, endOn);
+  if (options.previewChange) {
+    const change = options.previewChange;
+    if (change.periodId !== periodId || change.plannedOn < period.monthStart
+      || change.plannedOn > period.monthEnd) {
+      throw new AppError(400, 'VALIDATION_ERROR', '预览项目必须属于当前预算月份。');
+    }
+    if (change.itemId) {
+      const original = (await client.query<{ status: string }>(`SELECT status FROM budget_items
+        WHERE id=$1 AND owner_id=$2 AND period_id=$3 AND account_id=$4`,
+      [change.itemId, ownerId, periodId, period.accountId])).rows[0];
+      if (!original || original.status !== 'planned'
+        || !items.some((item) => item.id === change.itemId)) {
+        throw new AppError(409, 'ITEM_NOT_ORDERABLE', '只能预览本人尚未承诺的计划项目。');
+      }
+      if (safeMinor(items.find((item) => item.id === change.itemId)?.coveredMinor ?? 0) > 0) {
+        throw new AppError(409, 'ITEM_NOT_ORDERABLE', '已有实际支出关联，请先解除后再修改计划。');
+      }
+    }
+  }
+  if (options.excludedItemId) {
+    const excluded = (await client.query<{ status: string }>(`SELECT status FROM budget_items
+      WHERE id=$1 AND owner_id=$2 AND period_id=$3 AND account_id=$4`,
+    [options.excludedItemId, ownerId, periodId, period.accountId])).rows[0];
+    if (!excluded || excluded.status !== 'planned'
+      || !items.some((item) => item.id === options.excludedItemId)) {
+      throw new AppError(409, 'ITEM_NOT_ORDERABLE', '只能预览本人尚未承诺的计划项目。');
+    }
+    if (safeMinor(items.find((item) => item.id === options.excludedItemId)?.coveredMinor ?? 0) > 0) {
+      throw new AppError(409, 'ITEM_NOT_ORDERABLE', '已有实际支出关联，请先解除后再取消计划。');
+    }
+  }
   const overridden = new Map<string, PlannedRow>();
   if (options.optionChanges?.length) {
     const ids = options.optionChanges.map((change) => change.budgetItemId);
@@ -225,14 +263,16 @@ export async function forecastBudgetCashflow(client: PoolClient, ownerId: string
     }
     const candidates = (await client.query<PlannedRow>(`SELECT id,
       to_char(planned_on,'YYYY-MM-DD') AS "plannedOn",kind,status,
-      user_estimated_amount_minor AS "estimatedMinor",priority
+      user_estimated_amount_minor AS "estimatedMinor",priority,
+      COALESCE((SELECT SUM(l.covered_minor) FROM budget_ledger_links l
+        WHERE l.item_id=budget_items.id AND l.active),0)::text AS "coveredMinor"
       FROM budget_items WHERE owner_id=$1 AND period_id=$2 AND account_id=$3
         AND id=ANY($4::uuid[])`, [ownerId, periodId, period.accountId, ids])).rows;
     const byId = new Map(candidates.map((candidate) => [candidate.id, candidate]));
     for (const change of options.optionChanges) {
       const item = byId.get(change.budgetItemId);
       if (!item || item.kind !== 'planned_spend' || item.status !== 'planned'
-        || item.priority !== 'adjustable') {
+        || item.priority !== 'adjustable' || safeMinor(item.coveredMinor ?? 0) > 0) {
         throw new AppError(409, 'ITEM_NOT_ORDERABLE', '只能调整本人尚未承诺的可调消费。');
       }
       await expireStalePurchaseIntents(client, ownerId, item.id, now);
@@ -262,8 +302,15 @@ export async function forecastBudgetCashflow(client: PoolClient, ownerId: string
   }
   const cancelledIds = new Set(options.optionChanges?.filter((change) => change.action === 'cancel')
     .map((change) => change.budgetItemId) ?? []);
-  const effectiveItems = items.filter((item) => !cancelledIds.has(item.id))
+  const effectiveItems = items.filter((item) => !cancelledIds.has(item.id)
+      && item.id !== options.excludedItemId && item.id !== options.previewChange?.itemId)
     .map((item) => overridden.get(item.id) ?? item);
+  if (options.previewChange) {
+    effectiveItems.push({ id: options.previewChange.itemId ?? 'preview:new',
+      plannedOn: options.previewChange.plannedOn, kind: options.previewChange.kind,
+      status: 'planned', estimatedMinor: String(options.previewChange.userEstimatedAmountMinor),
+      priority: options.previewChange.priority });
+  }
   const orders = await readCommittedOrders(client, ownerId, period.accountId);
   const repayments: RepaymentRow[] = account.obligations.items.flatMap((row) =>
     'remainingDueMinor' in row ? [{
@@ -302,4 +349,39 @@ export async function forecastBudgetCashflow(client: PoolClient, ownerId: string
     forecast: missingMonths.length && forecast.status === 'unknown'
       ? { ...forecast, reasonCodes: [...new Set([...forecast.reasonCodes, 'ADJACENT_PERIOD_UNKNOWN'])] }
       : forecast };
+}
+
+export async function previewBudgetItemImpact(client: PoolClient, ownerId: string,
+  periodId: string, itemId: string) {
+  const now = new Date();
+  const withItem = await forecastBudgetCashflow(client, ownerId, periodId, { now });
+  const withoutItem = await forecastBudgetCashflow(client, ownerId, periodId, {
+    excludedItemId: itemId, expectedFinancialVersion: withItem.financialVersion,
+    expectedPeriodVersion: withItem.periodVersion, now,
+  });
+  return {
+    periodId, itemId,
+    financialVersion: withItem.financialVersion,
+    periodVersion: withItem.periodVersion,
+    withItem: withItem.forecast,
+    withoutItem: withoutItem.forecast,
+  };
+}
+
+export async function previewBudgetItemChange(client: PoolClient, ownerId: string,
+  periodId: string, input: BudgetItemChangeInput) {
+  const now = new Date();
+  const before = await forecastBudgetCashflow(client, ownerId, periodId, {
+    expectedFinancialVersion: input.expectedFinancialVersion,
+    expectedPeriodVersion: input.expectedPeriodVersion,
+    now,
+  });
+  const after = await forecastBudgetCashflow(client, ownerId, periodId, {
+    expectedFinancialVersion: before.financialVersion,
+    expectedPeriodVersion: before.periodVersion,
+    previewChange: input,
+    now,
+  });
+  return { periodId, itemId: input.itemId, financialVersion: before.financialVersion,
+    periodVersion: before.periodVersion, before: before.forecast, after: after.forecast };
 }

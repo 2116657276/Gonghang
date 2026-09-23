@@ -12,6 +12,7 @@ export type DailyCashflow = {
   cashShortfallMinor: number | null;
   savingsShortfallMinor: number | null;
   dataStatus: 'observed' | 'unknown';
+  events: CashflowEvent[];
 };
 
 function validMinor(value: number) {
@@ -44,6 +45,7 @@ export function unknownDailyCashflow(startOn: string, endOn: string, reasonCodes
     daily: affectedDates.map((on): DailyCashflow => ({
       on, projectedCashMinor: null, savingsHeadroomMinor: null,
       cashShortfallMinor: null, savingsShortfallMinor: null, dataStatus: 'unknown',
+      events: [],
     })),
   };
 }
@@ -65,10 +67,12 @@ export function calculateDailyCashflow(input: {
   const dates = eachDate(input.startOn, input.endOn);
   const dateSet = new Set(dates);
   const byDate = new Map<string, number>();
+  const eventsByDate = new Map<string, CashflowEvent[]>();
   for (const event of input.events) {
     validMinor(event.deltaMinor);
     if (!dateSet.has(event.on)) throw new Error('现金流事件必须位于评估日期内。');
     byDate.set(event.on, validMinor((byDate.get(event.on) ?? 0) + event.deltaMinor));
+    eventsByDate.set(event.on, [...(eventsByDate.get(event.on) ?? []), event]);
   }
   const unknown = new Set(input.unknownDates ?? []);
   for (const target of Object.values(input.savingsTargetsByDate ?? {})) {
@@ -86,6 +90,7 @@ export function calculateDailyCashflow(input: {
       return {
         on, projectedCashMinor: null, savingsHeadroomMinor: null,
         cashShortfallMinor: null, savingsShortfallMinor: null, dataStatus: 'unknown',
+        events: eventsByDate.get(on) ?? [],
       };
     }
     cash = validMinor(cash + (byDate.get(on) ?? 0));
@@ -97,6 +102,7 @@ export function calculateDailyCashflow(input: {
       on, projectedCashMinor: cash, savingsHeadroomMinor: headroom,
       cashShortfallMinor: Math.max(0, -cash), savingsShortfallMinor: Math.max(0, -headroom),
       dataStatus: 'observed',
+      events: eventsByDate.get(on) ?? [],
     };
   });
   const affectedDates = daily.filter((day) => day.dataStatus === 'unknown'

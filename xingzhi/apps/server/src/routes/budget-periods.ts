@@ -3,6 +3,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z, ZodError } from 'zod';
 import {
   budgetPeriodCreateInput, budgetPeriodActivationInput, budgetPeriodCloseInput, savingsTargetChangeInput,
+  budgetItemChangeInput,
 } from '@xingzhi/contracts';
 import { isTrustedWriteRequest } from '../auth/guards.js';
 import { query, transaction } from '../db/client.js';
@@ -11,8 +12,10 @@ import { runIdempotent } from '../domain/idempotency.js';
 import {
   createBudgetPeriod, readBudgetPeriod, activateBudgetPeriod, changeSavingsTarget,
 } from '../domain/budget-periods.js';
+import { forecastBudgetCashflow, previewBudgetItemChange, previewBudgetItemImpact } from '../domain/budget-cashflow.js';
 
 const periodPath = z.object({ id: z.string().uuid() }).strict();
+const itemImpactPath = z.object({ id: z.string().uuid(), itemId: z.string().uuid() }).strict();
 function keyForWrite(request: FastifyRequest) {
   if (!isTrustedWriteRequest(request)) {
     throw new AppError(403, 'RESOURCE_FORBIDDEN', '请求来源不被允许。');
@@ -57,6 +60,36 @@ export async function registerBudgetPeriodApi(app: FastifyInstance) {
   app.get('/api/budget-periods/:id', async (request) => {
     const { id } = periodPath.parse(request.params);
     return response(await transaction((client) => readBudgetPeriod(client, request.authUser!.id, id)));
+  });
+  app.get('/api/budget-periods/:id/rolling-cashflow', async (request) => {
+    const { id } = periodPath.parse(request.params);
+    const result = await transaction((client) => forecastBudgetCashflow(
+      client, request.authUser!.id, id, { rolling30: true },
+    ));
+    return { data: { periodId: result.periodId, accountId: result.accountId,
+      financialVersion: result.financialVersion, periodVersion: result.periodVersion,
+      asOf: result.asOf, conditionalIncomeMinor: result.conditionalIncomeMinor,
+      forecast: result.forecast },
+    meta: { financialVersion: result.financialVersion, periodVersion: result.periodVersion,
+      asOf: result.asOf } };
+  });
+  app.get('/api/budget-periods/:id/items/:itemId/impact', async (request) => {
+    const { id, itemId } = itemImpactPath.parse(request.params);
+    const result = await transaction((client) => previewBudgetItemImpact(
+      client, request.authUser!.id, id, itemId,
+    ));
+    return { data: result, meta: { financialVersion: result.financialVersion,
+      periodVersion: result.periodVersion } };
+  });
+  app.post('/api/budget-periods/:id/items/change-preview', async (request) => {
+    const { id } = periodPath.parse(request.params);
+    const input = budgetItemChangeInput.parse(request.body);
+    if (input.periodId !== id) throw new AppError(400, 'VALIDATION_ERROR', '路径周期必须与预览项目一致。');
+    const result = await transaction((client) => previewBudgetItemChange(
+      client, request.authUser!.id, id, input,
+    ));
+    return { data: result, meta: { financialVersion: result.financialVersion,
+      periodVersion: result.periodVersion } };
   });
   app.post('/api/budget-periods', async (request, reply) => {
     const input = budgetPeriodCreateInput.parse(request.body);

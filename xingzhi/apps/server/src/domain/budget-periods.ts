@@ -17,7 +17,8 @@ type Period = {
 type Item = {
   id: string; periodId: string; kind: 'expected_income' | 'essential_expense' | 'planned_spend';
   title: string; categoryCode: string | null; plannedOn: string; estimated: string;
-  priority: 'required' | 'adjustable'; status: 'planned' | 'committed' | 'settled' | 'cancelled'; version: string;
+  priority: 'required' | 'adjustable'; status: 'planned' | 'committed' | 'settled' | 'cancelled';
+  version: string; coveredMinor?: string;
 };
 
 function amount(value: string | number) {
@@ -109,10 +110,18 @@ async function noOpenIntent(client: PoolClient, ownerId: string, itemId: string)
     AND status IN ('proposed','confirmed','ordered') LIMIT 1`, [ownerId, itemId]);
   if (found.rowCount) throw new AppError(409, 'ITEM_NOT_ORDERABLE', '已有购买意图，不能直接改写或取消该项目。');
 }
+async function noActualLink(client: PoolClient, ownerId: string, itemId: string) {
+  if ((await client.query(`SELECT 1 FROM budget_ledger_links
+    WHERE owner_id=$1 AND item_id=$2 AND active LIMIT 1`, [ownerId, itemId])).rowCount) {
+    throw new AppError(409, 'ITEM_NOT_ORDERABLE', '已有实际支出关联，请先解除后再修改或取消计划。');
+  }
+}
 async function itemsForPeriod(client: PoolClient, ownerId: string, periodId: string) {
   return (await client.query<Item>(`SELECT id,period_id AS "periodId",kind,title,
       category_code AS "categoryCode",to_char(planned_on,'YYYY-MM-DD') AS "plannedOn",
-      user_estimated_amount_minor AS estimated,priority,status,version
+      user_estimated_amount_minor AS estimated,priority,status,version,
+      COALESCE((SELECT SUM(l.covered_minor) FROM budget_ledger_links l
+        WHERE l.item_id=budget_items.id AND l.active),0)::text AS "coveredMinor"
     FROM budget_items WHERE period_id=$1 AND owner_id=$2 ORDER BY planned_on,id`,
   [periodId, ownerId])).rows;
 }
@@ -123,7 +132,8 @@ export async function readBudgetPeriod(client: PoolClient, ownerId: string, peri
   const rows = await itemsForPeriod(client, ownerId, periodId);
   const active = rows.filter((row) => row.status !== 'cancelled' && row.status !== 'settled');
   const total = (predicate: (row: Item) => boolean) => active.filter(predicate)
-    .reduce((sum, row) => amount(sum + amount(row.estimated)), 0);
+    .reduce((sum, row) => amount(sum + Math.max(0,
+      amount(row.estimated) - amount(row.coveredMinor ?? 0))), 0);
   const forecast = period.status === 'active' && facts.account.status === 'linked'
     ? (await forecastBudgetCashflow(client, ownerId, periodId)).forecast : null;
   const orderRows = (await client.query<{ amount: number; debited: boolean }>(`SELECT o.amount_minor AS amount,
@@ -148,6 +158,7 @@ export async function readBudgetPeriod(client: PoolClient, ownerId: string, peri
     committedOrdersMinor, expectedIncomeMinor: total((row) => row.kind === 'expected_income'),
     pendingRefundMinor: facts.displayOnly.pendingRefundMinor,
     minimumProjectedCashMinor: forecast?.minimumProjectedCashMinor ?? null,
+    minimumSavingsHeadroomMinor: forecast?.minimumSavingsHeadroomMinor ?? null,
     minimumCashOn: forecast?.minimumCashOn ?? null,
     dataStatus: forecast?.status === 'unknown' || !forecast ? 'unknown'
       : facts.cashBasis.dataStatus === 'observed' ? 'observed' : 'incomplete',
@@ -162,7 +173,8 @@ export async function readBudgetPeriod(client: PoolClient, ownerId: string, peri
     items: rows.map(view), basis,
     forecast: forecast ?? { status: 'unknown' as const,
       reasonCodes: [period.status === 'closed' ? 'PERIOD_CLOSED' : 'PERIOD_NOT_ACTIVE_OR_CURRENT'],
-      shortfallMinor: null, affectedDates: [] },
+      shortfallMinor: null, minimumProjectedCashMinor: null, minimumSavingsHeadroomMinor: null,
+      minimumCashOn: null, affectedDates: [], daily: [] },
   };
 }
 
@@ -241,8 +253,12 @@ export async function changeSavingsTarget(client: PoolClient, ownerId: string,
 
 export async function applyBudgetItemChange(client: PoolClient, ownerId: string,
   input: BudgetItemChangeInput): Promise<BudgetItemMutationResult> {
-  const { period } = await accountThenPeriod(client, ownerId, input.periodId);
+  const { account, period } = await accountThenPeriod(client, ownerId, input.periodId);
   checkPeriodVersion(period, input.expectedPeriodVersion);
+  if (input.expectedFinancialVersion !== undefined
+    && amount(account.financialVersion) !== input.expectedFinancialVersion) {
+    throw new AppError(409, 'VERSION_CONFLICT', '账户资金依据已变化，请重新查看计划影响。');
+  }
   open(period);
   correctMonth(period, input.plannedOn);
   if (input.kind === 'essential_expense' && input.priority !== 'required') {
@@ -266,6 +282,7 @@ export async function applyBudgetItemChange(client: PoolClient, ownerId: string,
       throw new AppError(409, 'ITEM_NOT_ORDERABLE', '已承诺、已结算或已取消项目不能直接改写。');
     }
     await noOpenIntent(client, ownerId, itemId);
+    await noActualLink(client, ownerId, itemId);
     await client.query(`UPDATE budget_items SET kind=$1,title=$2,category_code=$3,planned_on=$4,
       user_estimated_amount_minor=$5,priority=$6 WHERE id=$7 AND owner_id=$8 AND period_id=$9`,
     [input.kind, input.title, input.categoryCode, input.plannedOn,
@@ -281,8 +298,12 @@ export async function applyBudgetItemChange(client: PoolClient, ownerId: string,
 
 export async function cancelBudgetItem(client: PoolClient, ownerId: string,
   input: BudgetItemCancelInput): Promise<BudgetItemMutationResult> {
-  const { period } = await accountThenPeriod(client, ownerId, input.periodId);
+  const { account, period } = await accountThenPeriod(client, ownerId, input.periodId);
   checkPeriodVersion(period, input.expectedPeriodVersion);
+  if (input.expectedFinancialVersion !== undefined
+    && amount(account.financialVersion) !== input.expectedFinancialVersion) {
+    throw new AppError(409, 'VERSION_CONFLICT', '账户资金依据已变化，请重新查看取消影响。');
+  }
   open(period);
   const current = await itemById(client, ownerId, input.periodId, input.itemId, true);
   if (current.status !== 'cancelled') {
@@ -290,6 +311,7 @@ export async function cancelBudgetItem(client: PoolClient, ownerId: string,
       throw new AppError(409, 'ITEM_NOT_ORDERABLE', '已承诺或已结算项目需走善后，不能直接取消。');
     }
     await noOpenIntent(client, ownerId, input.itemId);
+    await noActualLink(client, ownerId, input.itemId);
     await client.query(`UPDATE budget_items SET status='cancelled' WHERE id=$1 AND owner_id=$2 AND period_id=$3`,
       [input.itemId, ownerId, input.periodId]);
     await event(client, ownerId, input.periodId, 'budget_item_cancelled', {

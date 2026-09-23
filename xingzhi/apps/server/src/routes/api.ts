@@ -1,7 +1,7 @@
 import { lockOwnedProposal, budgetForPlan, createConfirmedOrder, preparePaymentHandoff, pausePurchases, submitConfirmedChange } from '../domain/business-actions.js';
 import { createPurchaseProposal, createChangeProposal } from '../domain/proposals.js';
 import { readCatalog, readCancellationQuote, readOperation, type CatalogRow } from '../domain/business-reads.js';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { PoolClient } from 'pg';
 import {
@@ -158,13 +158,35 @@ type LoginAccount = {
 
 async function authenticateAccount(value: unknown): Promise<LoginAccount | undefined> {
   const input = parse(loginInput, value);
-  const result = await query<LoginAccount>(
-    'SELECT id, email, display_name, role, password_hash FROM users WHERE email = $1',
-    [input.email.toLowerCase()],
-  );
-  const account = result.rows[0];
-  if (!account || !(await verifyPassword(input.password, account.password_hash))) return;
-  return account;
+  const email = input.email.toLowerCase();
+  const identityDigest = createHash('sha256').update(email).digest('hex');
+  return transaction(async (client) => {
+    await client.query("DELETE FROM login_attempt_limits WHERE updated_at < now()-interval '1 day'");
+    await client.query(`INSERT INTO login_attempt_limits(identity_digest) VALUES($1)
+      ON CONFLICT DO NOTHING`, [identityDigest]);
+    const limit = (await client.query<{ failedCount: number; windowStartedAt: Date; blockedUntil: Date | null }>(
+      `SELECT failed_count AS "failedCount",window_started_at AS "windowStartedAt",
+        blocked_until AS "blockedUntil" FROM login_attempt_limits
+       WHERE identity_digest=$1 FOR UPDATE`, [identityDigest])).rows[0]!;
+    const now = new Date();
+    if (limit.blockedUntil && limit.blockedUntil > now) {
+      throw new AppError(429, 'LOGIN_RATE_LIMIT', '登录尝试过于频繁，请稍后再试。');
+    }
+    const account = (await client.query<LoginAccount>(
+      'SELECT id,email,display_name,role,password_hash FROM users WHERE email=$1', [email])).rows[0];
+    if (account && await verifyPassword(input.password, account.password_hash)) {
+      await client.query('DELETE FROM login_attempt_limits WHERE identity_digest=$1', [identityDigest]);
+      return account;
+    }
+    const failedCount = limit.windowStartedAt.getTime() <= now.getTime() - 15 * 60_000
+      ? 1 : limit.failedCount + 1;
+    await client.query(`UPDATE login_attempt_limits SET failed_count=$2,
+      window_started_at=CASE WHEN $3::boolean THEN $4 ELSE window_started_at END,
+      blocked_until=CASE WHEN $2>=5 THEN $4::timestamptz+interval '15 minutes' ELSE NULL END,
+      updated_at=$4 WHERE identity_digest=$1`,
+    [identityDigest, failedCount, failedCount === 1, now]);
+    return undefined;
+  });
 }
 
 function publicUser(account: LoginAccount) {

@@ -13,6 +13,9 @@ export type {
   BudgetItem,
   BudgetItemInput,
   BudgetPeriod,
+  BudgetItemImpact,
+  BudgetItemChangePreview,
+  BudgetLedgerLinks,
   ConsumerOrder,
   ConsumerPreferences,
   FinanceAccountFacts,
@@ -31,5 +34,6 @@ export type {
   PurchaseIntent,
   PurchaseIntentProposal,
   RuntimeStatus,
+  RollingCashflow,
   ConsumerSessionUser as User,
 } from '@xingzhi/contracts';

@@ -42,6 +42,7 @@ test('B01 consumer item routes preserve transaction, ownership and idempotency b
         adjustablePlannedMinor: status === 'planned' ? 40000 : 32000,
         committedOrdersMinor: 0, expectedIncomeMinor: 0, pendingRefundMinor: 0,
         minimumProjectedCashMinor: status === 'planned' ? 20000 : 28000,
+        minimumSavingsHeadroomMinor: status === 'planned' ? 10000 : 18000,
         minimumCashOn: day, dataStatus: 'observed',
       },
     });

@@ -9,11 +9,50 @@ import { query, transaction } from '../db/client.js';
 import { createPlanningDraft } from '../routes/planning-drafts.js';
 import { budgetPlanningDraftPort } from './budget-planning-draft-port.js';
 import { readBudgetPeriod } from './budget-periods.js';
+import { forecastBudgetCashflow } from './budget-cashflow.js';
 import { consumerPlanningAgentTools } from './consumer-planning-tools.js';
 import { AppError, notFound } from './errors.js';
 import { reserveModelCost, settleModelCost } from './model-budget.js';
 import { deepseekPricing, modelCostMicros } from './model-pricing.js';
 import { modelRetryFetch } from './model-retry.js';
+
+function explicitlyStatedAmount(message: string, minor: number) {
+  const amount = minor / 100;
+  const variants = [String(amount), amount.toFixed(2)].map(value => value.replace('.', '\\.'));
+  return new RegExp(`(?:[¥￥]\\s*(?:${variants.join('|')})(?![\\d.])|(?:${variants.join('|')})\\s*(?:元|块))`).test(message);
+}
+
+export function constrainAgentDraftToMessage(items: z.infer<typeof planningDraftItem>[], message: string) {
+  return items.map((item) => {
+    const date = item.plannedOn;
+    const explicitDate = items.length === 1 && date !== null && (message.includes(date)
+      || message.includes(`${date.slice(0, 4)}年${Number(date.slice(5, 7))}月${Number(date.slice(8, 10))}日`));
+    const explicitAmount = items.length === 1 && item.userEstimatedAmountMinor !== null
+      && explicitlyStatedAmount(message, item.userEstimatedAmountMinor);
+    const explicitPriority = items.length === 1 && item.priority !== null
+      && (item.priority === 'required' ? /必须保留|必要支出/.test(message)
+        : /可调整|可以调整|可取消/.test(message));
+    const suggested = (!explicitDate && date !== null)
+      || (!explicitAmount && item.userEstimatedAmountMinor !== null)
+      || (!explicitPriority && item.priority !== null) || item.catalogItemId !== null;
+    return {
+      ...item,
+      plannedOn: explicitDate ? date : null,
+      userEstimatedAmountMinor: explicitAmount ? item.userEstimatedAmountMinor : null,
+      priority: explicitPriority ? item.priority : null,
+      catalogItemId: null,
+      suggestion: suggested ? {
+        title: item.suggestion?.title ?? null,
+        plannedOn: item.suggestion?.plannedOn ?? (!explicitDate ? date : null),
+        estimatedAmountMinor: item.suggestion?.estimatedAmountMinor
+          ?? (!explicitAmount ? item.userEstimatedAmountMinor : null),
+        priority: item.suggestion?.priority ?? (!explicitPriority ? item.priority : null),
+        catalogItemId: item.suggestion?.catalogItemId ?? item.catalogItemId,
+        reason: item.suggestion?.reason ?? '行止根据对话整理的建议，尚待用户确认。',
+      } : item.suggestion,
+    };
+  });
+}
 
 async function assertConsumerRunActive(runId: string) {
   if (!(await query(`SELECT 1 FROM agent_runs WHERE id=$1 AND workflow='consumer_planning'
@@ -23,22 +62,31 @@ async function assertConsumerRunActive(runId: string) {
 }
 
 export async function startConsumerAgentRun(user: AuthUser, key: string, input: {
-  message: string; periodId: string | null;
+  message: string; periodId: string | null; ledgerMonth?: string | null;
 }) {
   return transaction(async (client) => {
     await client.query('SELECT id FROM users WHERE id=$1 FOR UPDATE', [user.id]);
     let snapshotVersion = 0;
+    let boundMonth: string | null = null;
     if (input.periodId) {
-      const period = (await client.query<{ version: number }>(`SELECT version FROM budget_periods
+      const period = (await client.query<{ version: number; monthStart: string }>(`SELECT version,
+        to_char(month_start,'YYYY-MM-DD') AS "monthStart" FROM budget_periods
         WHERE id=$1 AND owner_id=$2`, [input.periodId, user.id])).rows[0];
       if (!period) throw new AppError(404, 'RESOURCE_FORBIDDEN', '未找到本人的预算周期。');
       snapshotVersion = Number(period.version);
+      boundMonth = input.ledgerMonth ?? period.monthStart.slice(0, 7);
     }
-    const existing = (await client.query<{ id: string; input: string; budgetPeriodId: string | null }>(`SELECT
-        id,input,budget_period_id AS "budgetPeriodId" FROM agent_runs
+    if (input.ledgerMonth && !input.periodId) {
+      throw new AppError(400, 'VALIDATION_ERROR', '月度账目提问必须绑定本人预算账户。');
+    }
+    const existing = (await client.query<{ id: string; input: string; budgetPeriodId: string | null;
+      ledgerMonth: string | null }>(`SELECT id,input,budget_period_id AS "budgetPeriodId",
+        to_char(ledger_month,'YYYY-MM') AS "ledgerMonth" FROM agent_runs
       WHERE owner_id=$1 AND trigger_key=$2 AND workflow='consumer_planning'`, [user.id, key])).rows[0];
     if (existing) {
-      if (existing.input !== input.message || existing.budgetPeriodId !== input.periodId) {
+      if (existing.input !== input.message || existing.budgetPeriodId !== input.periodId
+        || (existing.ledgerMonth !== null && existing.ledgerMonth !== boundMonth)
+        || (existing.ledgerMonth === null && input.ledgerMonth !== undefined && input.ledgerMonth !== null)) {
         throw new AppError(409, 'IDEMPOTENCY_CONFLICT', '同一请求标识不能用于不同的规划消息。');
       }
       return { runId: existing.id, reused: true };
@@ -58,9 +106,10 @@ export async function startConsumerAgentRun(user: AuthUser, key: string, input: 
       [user.id, rate.available - 1]);
     const runId = randomUUID();
     await client.query(`INSERT INTO agent_runs
-        (id,plan_id,budget_period_id,workflow,owner_id,trigger_key,input,snapshot_version,state)
-      VALUES($1,NULL,$2,'consumer_planning',$3,$4,$5,$6,'RUNNING')`,
-    [runId, input.periodId, user.id, key, input.message, snapshotVersion]);
+        (id,plan_id,budget_period_id,workflow,owner_id,trigger_key,input,snapshot_version,state,ledger_month)
+      VALUES($1,NULL,$2,'consumer_planning',$3,$4,$5,$6,'RUNNING',$7::date)`,
+    [runId, input.periodId, user.id, key, input.message, snapshotVersion,
+      boundMonth ? `${boundMonth}-01` : null]);
     if (input.periodId) await client.query(`INSERT INTO budget_events
         (owner_id,period_id,actor_id,type,data) VALUES($1,$2,$1,'agent_run_started',$3)`,
       [user.id, input.periodId, { runId }]);
@@ -139,6 +188,9 @@ export async function executeConsumerAgentRun(runId: string, user: AuthUser,
   const abort = new AbortController();
   const combined = AbortSignal.any([signal, abort.signal, AbortSignal.timeout(120_000)]);
   const ensureActive = async () => { combined.throwIfAborted(); await assertConsumerRunActive(runId); };
+  const selectedLedgerMonth = (await query<{ month: string | null }>(`SELECT
+    to_char(ledger_month,'YYYY-MM') AS month FROM agent_runs WHERE id=$1 AND owner_id=$2`,
+  [runId, user.id])).rows[0]?.month ?? null;
   const reserveAttempt = async () => {
     await ensureActive();
     if (modelCalls >= 8) throw new Error('模型调用次数达到上限。');
@@ -158,10 +210,62 @@ export async function executeConsumerAgentRun(runId: string, user: AuthUser,
       z.object({}).strict().parse(raw);
       if (!periodId) throw new AppError(409, 'FINANCE_BASIS_UNKNOWN', '本次运行尚未绑定预算周期。');
       await query('UPDATE agent_runs SET tool_calls=$2 WHERE id=$1', [runId, toolCalls]);
-      const result = await transaction((client) => readBudgetPeriod(client, user.id, periodId));
+      const result = await transaction(async (client) => {
+        const period = await readBudgetPeriod(client, user.id, periodId);
+        const account = (await client.query<{ source: string; status: string }>(`SELECT source,status
+          FROM finance_accounts WHERE id=$1 AND owner_id=$2`,
+        [period.period.accountId, user.id])).rows[0]!;
+        const rolling = period.period.status === 'active' && period.basis.dataStatus === 'observed'
+          ? await forecastBudgetCashflow(client, user.id, periodId, {
+            rolling30: true, expectedFinancialVersion: period.basis.financialVersion,
+            expectedPeriodVersion: period.basis.periodVersion,
+          }) : null;
+        return { ...period, accountSource: account.source, accountStatus: account.status,
+          rolling30: rolling?.forecast ?? null };
+      });
       readBasis = { financialVersion: result.basis.financialVersion,
         periodVersion: result.basis.periodVersion };
       return result;
+    },
+    read_month_ledger_summary: async (raw) => {
+      await ensureActive();
+      if (++toolCalls > 20) throw new Error('工具次数达到上限。');
+      const { month } = z.object({ month: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/) }).strict().parse(raw);
+      if (!periodId) throw new AppError(409, 'FINANCE_BASIS_UNKNOWN', '本次运行尚未绑定本人预算账户。');
+      if (month !== selectedLedgerMonth) throw new AppError(409, 'RESOURCE_FORBIDDEN', '只能读取本次选择月份的账目汇总。');
+      const account = (await query<{ accountId: string; accountSource: string }>(`SELECT
+        period.primary_account_id AS "accountId",account.source AS "accountSource"
+        FROM budget_periods period JOIN finance_accounts account
+          ON account.id=period.primary_account_id AND account.owner_id=period.owner_id
+        WHERE period.id=$1 AND period.owner_id=$2`, [periodId, user.id])).rows[0];
+      if (!account) throw new AppError(404, 'RESOURCE_FORBIDDEN', '未找到本人的预算周期。');
+      await query('UPDATE agent_runs SET tool_calls=$2 WHERE id=$1', [runId, toolCalls]);
+      const rows = (await query<{ direction: 'inflow' | 'outflow'; category: string;
+        isRefund: boolean; amountMinor: string; count: string }>(`WITH selected AS (
+          SELECT entry.direction,
+            COALESCE(override.display_category,entry.category,'other') AS category,
+            (entry.direction='inflow' AND (entry.category='refund' OR EXISTS(
+              SELECT 1 FROM finance_money_events money WHERE money.applied_ledger_entry_id=entry.id
+                AND money.owner_id=entry.owner_id AND money.event_type='refund_verified'
+                AND money.verification_state='verified'))) AS "isRefund",
+            entry.amount_minor
+          FROM finance_ledger_entries entry
+          LEFT JOIN finance_ledger_category_overrides override
+            ON override.entry_id=entry.id AND override.owner_id=entry.owner_id
+          WHERE entry.owner_id=$1 AND entry.account_id=$2 AND entry.status='posted'
+            AND (entry.occurred_at AT TIME ZONE 'Asia/Shanghai')::date >= ($3::text||'-01')::date
+            AND (entry.occurred_at AT TIME ZONE 'Asia/Shanghai')::date
+              < (($3::text||'-01')::date + interval '1 month')::date
+        ) SELECT direction,category,"isRefund",SUM(amount_minor)::text AS "amountMinor",
+          COUNT(*)::text AS count FROM selected GROUP BY direction,category,"isRefund"
+        ORDER BY direction,category,"isRefund"`, [user.id, account.accountId, month])).rows;
+      return { month, timezone: 'Asia/Shanghai', source: 'posted_account_ledger',
+        accountSource: account.accountSource,
+        totalInflowMinor: rows.filter(row => row.direction === 'inflow').reduce((sum, row) => sum + Number(row.amountMinor), 0),
+        totalOutflowMinor: rows.filter(row => row.direction === 'outflow').reduce((sum, row) => sum + Number(row.amountMinor), 0),
+        refundInflowMinor: rows.filter(row => row.isRefund).reduce((sum, row) => sum + Number(row.amountMinor), 0),
+        categories: rows.map(row => ({ direction: row.direction, category: row.category,
+          isRefund: row.isRefund, amountMinor: Number(row.amountMinor), count: Number(row.count) })) };
     },
     search_offers: async (raw) => {
       await ensureActive();
@@ -185,7 +289,8 @@ export async function executeConsumerAgentRun(runId: string, user: AuthUser,
       if (periodId && !readBasis) throw new AppError(409, 'FINANCE_BASIS_UNKNOWN', '保存周期草稿前必须读取本次绑定的资金依据。');
       const input = planningDraftInput.parse({ periodId,
         expectedFinancialVersion: readBasis?.financialVersion ?? null,
-        expectedPeriodVersion: readBasis?.periodVersion ?? null, items: payload.items });
+        expectedPeriodVersion: readBasis?.periodVersion ?? null,
+        items: constrainAgentDraftToMessage(payload.items, message) });
       await query('UPDATE agent_runs SET tool_calls=$2 WHERE id=$1', [runId, toolCalls]);
       return transaction(async (client) => {
         const draft = await createPlanningDraft(client, budgetPlanningDraftPort, user.id, input);
@@ -200,7 +305,7 @@ export async function executeConsumerAgentRun(runId: string, user: AuthUser,
     year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
   const agent = new Agent({ initialState: { model, systemPrompt:
     `你是行止银行消费规划助手。当前上海日期为 ${shanghaiDate}；本次运行${periodId ? '已由服务端绑定预算周期' : '未绑定预算周期'}。只依据工具返回的本人预算和银行平台登记商品回答。
-用户明确给出的需求可保存为待确认草稿；缺失日期、金额或优先级必须保留为空，不得自行补写。
+用户明确给出的需求可保存为待确认草稿；缺失日期、金额或优先级必须保留为空，不得自行补写。解释账目时只能用本人绑定账户的${selectedLedgerMonth ?? '未选择'}月已入账汇总，不得索要或输出全部逐笔流水；工具返回的 accountSource 为 demo 时必须明说是演示数据，不能称为真实银行同步。
 你可以读取预算、搜索登记商品、保存非执行草稿。你不能选择商品、修改正式预算或储蓄目标、确认购买、创建订单、支付、取消或退款。
 金额字段以分计，展示为元时除以100。不要展示内部标识、密钥、模型推理过程或不必要的逐笔流水。`,
     tools }, toolExecution: 'sequential',

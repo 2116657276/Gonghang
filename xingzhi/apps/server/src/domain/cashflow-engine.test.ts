@@ -17,6 +17,8 @@ test('A03 protects ¥500 savings: ¥200 → ¥181 → ¥219 gap', () => {
   const original = calculateDailyCashflow(base);
   assert.equal(original.status, 'allowed');
   assert.equal(original.minimumSavingsHeadroomMinor, 20000);
+  assert.deepEqual(original.daily.at(-1)?.events.map((event) => event.referenceId),
+    ['essentials', 'flexible']);
   const withQuoteDifference = calculateDailyCashflow({ ...base, events: [
     ...base.events,
     { on: startOn, deltaMinor: -1900, kind: 'committed_order', referenceId: 'quote-difference' },

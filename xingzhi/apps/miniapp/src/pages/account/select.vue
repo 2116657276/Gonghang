@@ -35,13 +35,13 @@ async function select(id: string) {
       <view v-if="saveError" class="notice notice--error intro">{{ saveError }}</view>
       <view v-if="overview.accounts.value.length" class="account-list">
         <SectionCard v-for="value in overview.accounts.value" :key="value.account.accountId" class="account">
-          <view class="row-between"><view><text class="title">{{ value.account.displayName }}</text><text class="meta">{{ value.account.maskedIdentifier }} · {{ value.account.accountType==='debit'?'借记账户':value.account.accountType }}</text></view><StatusBadge :label="overview.preferences.value?.defaultAccountId===value.account.accountId?'默认账户':value.account.status==='linked'?'可用于规划':'已撤回'" :tone="value.account.status==='linked'?'success':'neutral'"/></view>
+          <view class="row-between"><view><text class="title">{{ value.account.displayName }}</text><text class="meta">{{ value.account.maskedIdentifier }} · {{ value.account.accountType==='debit'?'借记账户':value.account.accountType }}</text></view><StatusBadge :label="value.account.status==='revoked'?'已撤回':value.account.accountType!=='debit'?'不可作主账户':overview.preferences.value?.defaultAccountId===value.account.accountId?'默认账户':'可用于规划'" :tone="value.account.status==='linked'&&value.account.accountType==='debit'?'success':'neutral'"/></view>
           <FactRow label="确认可用资金" :value="yuan(value.cashBasis.confirmedCashMinor)" emphasis />
           <view class="actions"><button class="text-button" @tap="open(value.account.accountId)">查看账户依据</button><button v-if="value.account.status==='linked'&&value.account.accountType==='debit'" class="secondary-button choose" :disabled="savingId!==''||overview.preferences.value?.defaultAccountId===value.account.accountId" @tap="select(value.account.accountId)">{{overview.preferences.value?.defaultAccountId===value.account.accountId?'当前默认':savingId===value.account.accountId?'正在保存…':'设为默认'}}</button></view>
         </SectionCard>
       </view>
       <StatePanel v-else title="还没有规划账户" detail="当前账户没有可读取的资金授权，无法建立新的预算周期。" />
-      <button class="primary-button create" :disabled="!overview.accounts.value.some(v=>v.account.status==='linked')" @tap="Taro.navigateTo({url:'/pages/period/edit'})">使用可用账户新建预算</button>
+      <button class="primary-button create" :disabled="!overview.accounts.value.some(v=>v.account.status==='linked'&&v.account.accountType==='debit')" @tap="Taro.navigateTo({url:'/pages/period/edit'})">使用可用账户新建预算</button>
     </template>
   </PageShell>
 </template>

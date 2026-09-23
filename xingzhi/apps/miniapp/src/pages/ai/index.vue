@@ -8,10 +8,11 @@ import PageShell from '@/components/PageShell.vue';
 import StatePanel from '@/components/StatePanel.vue';
 import StatusBadge from '@/components/StatusBadge.vue';
 import { useOverview } from '@/composables/useOverview';
+import { takeAiQuestion } from '@/lib/ai-entry';
 import { api, ApiError, goLogin } from '@/lib/api';
 import { errorMessage } from '@/lib/errors';
 import { fundingLabel, shortDate, yuan } from '@/lib/format';
-import type { AgentRun } from '@/lib/types';
+import type { AgentRun, PlanningDraft } from '@/lib/types';
 
 type Message = { id: string; role: 'user' | 'assistant'; text: string; at: string; run?: AgentRun };
 
@@ -20,37 +21,69 @@ const input = ref('');
 const sending = ref(false);
 const error = ref('');
 const messages = ref<Message[]>([]);
+const drafts = ref<Record<string, PlanningDraft>>({});
 const contextOpen = ref(false);
 const selectedPeriodId = ref<string | null>(null);
 const pendingPeriodId = ref<string | null>(null);
+const selectedItemId = ref<string | null>(null);
+const selectedOn = ref<string | null>(null);
+const selectedLedgerMonth = ref<string | null>(null);
 let contextInitialized = false;
 let timer: ReturnType<typeof setTimeout> | undefined;
 let alive = true;
 
 const selectedPeriod = computed(() => overview.periods.value.find(item => item.period.periodId === selectedPeriodId.value) ?? null);
+const selectedItem = computed(() => selectedPeriod.value?.items.find(item => item.itemId === selectedItemId.value) ?? null);
+const accountLabel = (accountId: string) => {
+  const account = overview.accounts.value.find(item => item.account.accountId === accountId)?.account;
+  return account ? `${account.displayName} ${account.maskedIdentifier}${account.source==='demo'?' · Demo 数据':''}` : '账户信息不可用';
+};
 const contextLabel = computed(() => selectedPeriod.value ? `${selectedPeriod.value.period.monthStart.slice(0,7).replace('-','年')}月计划` : '不带具体计划');
 const contextDetail = computed(() => selectedPeriod.value
-  ? `${overview.primaryAccount.value?.account.displayName ?? '未选择账户'} · ${fundingLabel(selectedPeriod.value.forecast.status)}`
+  ? `${accountLabel(selectedPeriod.value.period.accountId)} · ${fundingLabel(selectedPeriod.value.forecast.status)}`
   : '只讨论你的问题，不绑定具体预算周期');
-const shortcuts = ['我最近还能怎么安排？', '帮我做一个周末计划', '为什么资金判断是未知？', '哪些计划需要调整？'];
+const shortcuts = ['我最近还能怎么安排？', '帮我做一个周末计划草稿，缺失金额和日期请留待我确认',
+  '为什么本月最低余额或资金判断是未知？', '哪些可调整项目会影响本月保留目标？'];
 
 useDidShow(async () => {
   await overview.load();
+  if (overview.error.value) return;
   if (!contextInitialized) {
     selectedPeriodId.value = overview.currentPeriod.value?.period.periodId ?? null;
     pendingPeriodId.value = selectedPeriodId.value;
     contextInitialized = true;
+  } else if (selectedPeriodId.value && !selectedPeriod.value) {
+    selectedPeriodId.value = null;
+    pendingPeriodId.value = null;
+  }
+  const entry = takeAiQuestion();
+  if (entry) {
+    if (overview.periods.value.some(period => period.period.periodId === entry.periodId)) {
+      selectedPeriodId.value = entry.periodId;
+      pendingPeriodId.value = entry.periodId;
+      selectedItemId.value = entry.itemId ?? null;
+      selectedOn.value = entry.on ?? null;
+      selectedLedgerMonth.value = entry.ledgerMonth ?? null;
+      input.value = entry.question;
+    } else error.value = '原计划已不可用，请重新选择本人预算周期。';
   }
 });
 onBeforeUnmount(() => { alive = false; if (timer) clearTimeout(timer); });
 
 function schedule(runId: string) { if (timer) clearTimeout(timer); timer = setTimeout(() => void poll(runId), 1500); }
+async function loadDraftArtifacts(run: AgentRun) {
+  await Promise.all(run.artifacts.filter(artifact => !drafts.value[artifact.draftId]).map(async artifact => {
+    try { drafts.value[artifact.draftId] = (await api.planningDraft(artifact.draftId)).data; }
+    catch { /* The detail page remains the recovery entry if a draft changed. */ }
+  }));
+}
 async function poll(runId: string) {
   if (!alive) return;
   try {
     const result = (await api.agentRun(runId)).data;
     const message = messages.value.find(item => item.id === runId);
     if (message) { message.run = result; message.text = result.output || stateText(result.state, result.errorCode); }
+    if (result.artifacts.length) await loadDraftArtifacts(result);
     if (result.state === 'RUNNING') schedule(runId); else sending.value = false;
   } catch (reason) { sending.value = false; error.value = errorMessage(reason); }
 }
@@ -67,7 +100,7 @@ async function send(value?: string) {
   error.value = ''; sending.value = true; input.value = '';
   messages.value.push({ id: `user-${Date.now()}`, role: 'user', text, at: nowLabel() });
   try {
-    const result = (await api.startAgent(text, selectedPeriodId.value)).data;
+    const result = (await api.startAgent(text, selectedPeriodId.value, selectedLedgerMonth.value)).data;
     messages.value.push({ id: result.runId, role: 'assistant', text: '我正在核对计划与资金事实…', at: nowLabel() });
     await poll(result.runId);
   } catch (reason) {
@@ -77,7 +110,14 @@ async function send(value?: string) {
   }
 }
 function openContext() { pendingPeriodId.value = selectedPeriodId.value; contextOpen.value = true; }
-function confirmContext() { selectedPeriodId.value = pendingPeriodId.value; contextOpen.value = false; }
+function confirmContext() { selectedPeriodId.value = pendingPeriodId.value; selectedItemId.value = null;
+  selectedOn.value = null; selectedLedgerMonth.value = null; contextOpen.value = false; }
+function chooseShortcut(value: string) { input.value = value; }
+function draftField<T>(value: T | null, suggestion: T | null | undefined) {
+  return value !== null ? { value, source: '用户提供' }
+    : suggestion !== null && suggestion !== undefined ? { value: suggestion, source: '行止建议，待确认' }
+      : { value: null, source: '待补充' };
+}
 </script>
 
 <template>
@@ -86,13 +126,25 @@ function confirmContext() { selectedPeriodId.value = pendingPeriodId.value; cont
     <view class="context-card" @tap="openContext">
       <view><text class="context-card__label">当前上下文</text><text class="context-card__value">{{ contextLabel }}</text><text class="context-card__detail">{{ contextDetail }}</text></view><text class="context-card__arrow">›</text>
     </view>
+    <view v-if="selectedPeriod" class="basis-card">
+      <text class="basis-card__title">可核对的计划依据</text>
+      <text>{{ accountLabel(selectedPeriod.period.accountId) }} · {{ selectedPeriod.period.monthStart.slice(0,7).replace('-','年') }}月</text>
+      <text>确认现金 {{ yuan(selectedPeriod.basis.confirmedCashMinor) }} · 预计最低 {{ yuan(selectedPeriod.basis.minimumProjectedCashMinor) }}</text>
+      <text>最低缓冲／缺口 {{ yuan(selectedPeriod.basis.minimumSavingsHeadroomMinor) }} · {{ fundingLabel(selectedPeriod.forecast.status) }}</text>
+      <text v-if="selectedOn">本次提问关注 {{ shortDate(selectedOn) }}</text>
+      <text v-if="selectedLedgerMonth">账目汇总仅限 {{ selectedLedgerMonth.replace('-', '年') }}月</text>
+      <text v-if="selectedItem">关联项目：{{ selectedItem.title }} · {{ yuan(selectedItem.userEstimatedAmountMinor) }}</text>
+      <button v-if="selectedItem" class="link-button" @tap="Taro.navigateTo({url:`/pages/impact/detail?periodId=${selectedPeriodId}&itemId=${selectedItemId}`})">不使用 AI，直接核对项目影响 ›</button>
+      <button v-else class="link-button" @tap="Taro.navigateTo({url:`/pages/period/detail?id=${selectedPeriodId}`})">不使用 AI，直接查看周期依据 ›</button>
+    </view>
+    <view v-if="input.trim()" class="question-preview"><text>待发送问题</text><text>{{ input }}</text><text>请检查内容，点击下方发送后才会启动 AI。</text></view>
     <view class="welcome"><IpAvatar size="large"/><view class="welcome__bubble">今天想让我帮你看看什么？</view></view>
-    <scroll-view class="shortcut-scroll" scroll-x><button v-for="item in shortcuts" :key="item" class="shortcut" :disabled="sending" @tap="send(item)">{{ item }}</button></scroll-view>
+    <scroll-view class="shortcut-scroll" scroll-x><button v-for="item in shortcuts" :key="item" class="shortcut" :disabled="sending" @tap="chooseShortcut(item)">{{ item }}</button></scroll-view>
     <view v-if="messages.length" class="message-list">
       <view v-for="message in messages" :key="message.id" class="message" :class="`message--${message.role}`">
         <IpAvatar v-if="message.role==='assistant'" size="small"/>
         <view class="message__content"><view class="message__bubble"><text>{{ message.text }}</text></view><text class="message__time">{{ message.at }}</text>
-          <view v-for="artifact in message.run?.artifacts??[]" :key="artifact.draftId" class="result-card" @tap="Taro.navigateTo({url:`/pages/draft/detail?id=${artifact.draftId}`})"><view class="row-between"><text class="result-card__title">计划草稿</text><StatusBadge label="等待你确认" tone="info"/></view><text class="result-card__detail">行止已整理出结构化草稿。它不会自动改变账户、预算或执行购买。</text><button class="link-button">查看并继续完善 ›</button></view>
+          <view v-for="artifact in message.run?.artifacts??[]" :key="artifact.draftId" class="result-card"><view class="row-between"><text class="result-card__title">已保存的计划草稿</text><StatusBadge label="等待你确认" tone="info"/></view><template v-if="drafts[artifact.draftId]"><view v-for="(item,index) in drafts[artifact.draftId].items" :key="index" class="draft-summary"><text>{{ item.title }}</text><text>日期：{{ shortDate(draftField(item.plannedOn,item.suggestion?.plannedOn).value) }} · {{ draftField(item.plannedOn,item.suggestion?.plannedOn).source }}</text><text>预算：{{ yuan(draftField(item.userEstimatedAmountMinor,item.suggestion?.estimatedAmountMinor).value) }} · {{ draftField(item.userEstimatedAmountMinor,item.suggestion?.estimatedAmountMinor).source }}</text><text>优先级：{{ draftField(item.priority,item.suggestion?.priority).value==='required'?'必须保留':draftField(item.priority,item.suggestion?.priority).value==='adjustable'?'可以调整':'待补充' }} · {{ draftField(item.priority,item.suggestion?.priority).source }}</text></view><text v-if="drafts[artifact.draftId].missingFields.length" class="result-card__detail">{{ drafts[artifact.draftId].missingFields.length }} 项原始字段待你补充；建议值不会自动变为已确认值。</text></template><text v-else class="result-card__detail">草稿已保存，打开详情可读取完整字段。</text><button class="link-button" @tap="Taro.navigateTo({url:`/pages/draft/detail?id=${artifact.draftId}`})">查看逐项影响与完善 ›</button></view>
         </view>
       </view>
     </view>
@@ -103,7 +155,7 @@ function confirmContext() { selectedPeriodId.value = pendingPeriodId.value; cont
 
   <BottomSheet above-tab-bar :model-value="contextOpen" title="选择对话上下文" description="切换只影响后续提问，不会修改任何计划。" primary-text="使用这个上下文" @update:model-value="contextOpen=$event" @primary="confirmContext">
     <view class="context-options">
-      <button v-for="period in overview.periods.value" :key="period.period.periodId" class="context-option" :class="{'context-option--selected':pendingPeriodId===period.period.periodId}" @tap="pendingPeriodId=period.period.periodId"><view><text>{{ period.period.monthStart.slice(0,7).replace('-','年') }}月计划</text><text>{{ fundingLabel(period.forecast.status) }} · 最低 {{ yuan(period.basis.minimumProjectedCashMinor) }}</text></view><text>{{ pendingPeriodId===period.period.periodId?'✓':'○' }}</text></button>
+      <button v-for="period in overview.periods.value" :key="period.period.periodId" class="context-option" :class="{'context-option--selected':pendingPeriodId===period.period.periodId}" @tap="pendingPeriodId=period.period.periodId"><view><text>{{ period.period.monthStart.slice(0,7).replace('-','年') }}月计划</text><text>{{ accountLabel(period.period.accountId) }} · {{ fundingLabel(period.forecast.status) }} · 最低 {{ yuan(period.basis.minimumProjectedCashMinor) }}</text></view><text>{{ pendingPeriodId===period.period.periodId?'✓':'○' }}</text></button>
       <button class="context-option" :class="{'context-option--selected':pendingPeriodId===null}" @tap="pendingPeriodId=null"><view><text>不带具体上下文</text><text>只讨论当前问题，不绑定预算周期</text></view><text>{{ pendingPeriodId===null?'✓':'○' }}</text></button>
     </view>
   </BottomSheet>
@@ -116,5 +168,6 @@ function confirmContext() { selectedPeriodId.value = pendingPeriodId.value; cont
 .welcome{display:flex;flex-direction:column;align-items:center;margin:34px 0 20px}.welcome__bubble{margin-top:-5px;padding:17px 24px;background:#fff;border:1px solid $border;border-radius:22px;font-size:24px;box-shadow:$shadow-card}.shortcut-scroll{margin-bottom:24px;white-space:nowrap;scrollbar-width:none}.shortcut-scroll::-webkit-scrollbar{display:none}.shortcut{display:inline-flex;width:auto;align-items:center;justify-content:center;margin-right:12px;padding:17px 24px;color:$brand-deep;background:$surface-tint;border-radius:999px;font-size:22px;line-height:1.2;white-space:nowrap}
 .message-list{display:grid;gap:18px;margin:22px 0}.message{display:flex;align-items:flex-start;gap:12px}.message--user{justify-content:flex-end}.message__content{max-width:78%}.message__bubble{padding:19px 22px;background:#fff;border:1px solid $border;border-radius:8px 20px 20px 20px;box-shadow:0 8px 25px rgba(31,66,54,.05)}.message--user .message__bubble{color:$brand-deep;background:$surface-tint;border-color:#D5E5DC;border-radius:20px 8px 20px 20px}.message__bubble text{font-size:24px;line-height:1.65;white-space:pre-wrap}.message__time{display:block;margin:6px 8px 0;color:$text-tertiary;font-size:18px}.message--user .message__time{text-align:right}.result-card{margin-top:10px;padding:20px;background:#fff;border:1px solid #CFE0D7;border-radius:18px;box-shadow:$shadow-card}.result-card__title{font-size:25px;font-weight:680}.result-card__detail{display:block;margin:14px 0;color:$text-secondary;font-size:21px;line-height:1.6}
 .ai-error{margin:18px 0}.composer{position:sticky;bottom:calc(104px + env(safe-area-inset-bottom));z-index:10;display:flex;align-items:flex-end;gap:12px;margin-top:24px;padding:12px;background:rgba(255,255,255,.97);border:1px solid $border;border-radius:24px;box-shadow:0 12px 40px rgba(31,66,54,.14)}.composer textarea{flex:1;min-width:0;min-height:56px;max-height:180px;padding:8px 0;color:$text-primary;font-size:25px;line-height:1.55}.composer__add,.send-button{display:flex;flex:0 0 62px;width:62px;height:62px;align-items:center;justify-content:center;padding:0;border-radius:50%;font-size:30px;line-height:1}.composer__add{color:$brand-primary;background:$surface-tint}.composer__add[disabled]{color:$text-tertiary;opacity:.65}.send-button{color:#fff;background:$brand-primary}.send-button[disabled]{opacity:.45}
+.basis-card,.question-preview{display:grid;gap:8px;margin-top:16px;padding:20px 24px;background:$soft-surface;border:1px solid $border;border-radius:18px;font-size:21px;line-height:1.45}.basis-card__title,.question-preview text:first-child{font-size:24px;font-weight:680}.basis-card .link-button{justify-self:start;margin-top:4px}.question-preview{background:$surface-tint}.question-preview text:last-child{color:$text-secondary;font-size:19px}.draft-summary{display:grid;gap:5px;margin-top:14px;padding-top:12px;border-top:1px solid $border;font-size:20px;line-height:1.4}.draft-summary text:first-child{font-size:23px;font-weight:650}
 .context-options{overflow:hidden;border:1px solid $border;border-radius:18px}.context-option{display:flex;width:100%;align-items:center;justify-content:space-between;gap:20px;padding:20px;text-align:left}.context-option+.context-option{border-top:1px solid $border}.context-option text{display:block}.context-option view text:first-child{font-size:24px;font-weight:650}.context-option view text+text{margin-top:6px;color:$text-secondary;font-size:20px}.context-option>text{color:$text-tertiary;font-size:28px}.context-option--selected{background:$surface-tint}.context-option--selected>text{color:$brand-primary}
 </style>

@@ -58,6 +58,7 @@ test('F2 account-only scenario creates finance facts without a budget and never 
   assert.equal(Number((await pool.query('SELECT count(*) FROM budget_periods WHERE owner_id=$1', [first.ownerId])).rows[0].count), 0);
   assert.equal(Number((await pool.query('SELECT count(*) FROM budget_items WHERE owner_id=$1', [first.ownerId])).rows[0].count), 0);
   assert.equal(Number((await pool.query('SELECT count(*) FROM finance_accounts WHERE owner_id=$1', [first.ownerId])).rows[0].count), 2);
+  assert.equal(Number((await pool.query('SELECT count(*) FROM finance_ledger_entries WHERE owner_id=$1', [first.ownerId])).rows[0].count), 0);
   const repeated = await seed({ ...input, password: 'different-password' });
   assert.equal(repeated.reused, true);
   assert.equal(repeated.ownerId, first.ownerId);
@@ -78,6 +79,13 @@ test('D1 complete scenarios bind one merchant and reviewer, with separate automa
     serviceOn, password: 'test-password', now, mode: 'complete', aftercareMode: 'automatic' });
   assert.equal(automatic.merchantId, merchantId); assert.equal(automatic.reviewerId, reviewerId);
   assert.ok(automatic.catalogItemId); assert.ok(automatic.quoteId);
+  const ledger = (await pool.query<{ source: string; direction: string; amount_minor: number; covered: boolean }>(`
+    SELECT l.source,l.direction,l.amount_minor,l.occurred_at<=s.covered_through_at AS covered
+      FROM finance_ledger_entries l JOIN finance_account_snapshots s ON s.account_id=l.account_id
+      WHERE l.owner_id=$1 ORDER BY l.amount_minor`, [automatic.ownerId])).rows;
+  assert.deepEqual(ledger.map(row => [row.source, row.direction, row.amount_minor, row.covered]), [
+    ['demo', 'outflow', 300, true], ['demo', 'outflow', 1800, true], ['demo', 'inflow', 30000, true],
+  ]);
   const manualInput = { scenarioKey: `manual-${randomUUID().replaceAll('-', '')}`,
     serviceOn, password: 'test-password', now, mode: 'complete' as const,
     aftercareMode: 'merchant-review' as const };

@@ -17,6 +17,7 @@ const messageInput=z.object({message:z.string().trim().min(1).max(4000)}).strict
 const consumerMessageInput=z.object({
   message:z.string().trim().min(1).max(4000),
   periodId:z.string().uuid().nullable().default(null),
+  ledgerMonth:z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/).nullable().default(null),
 }).strict();
 const consumerRunQuery=z.object({
   periodId:z.union([z.string().uuid(),z.literal('null')]).optional(),

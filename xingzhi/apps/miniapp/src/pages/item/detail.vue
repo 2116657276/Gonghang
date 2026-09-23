@@ -10,19 +10,22 @@ import StatusBadge from '@/components/StatusBadge.vue';
 import { api } from '@/lib/api';
 import { errorMessage } from '@/lib/errors';
 import { fundingLabel, shortDate, yuan } from '@/lib/format';
-import type { BudgetItem, BudgetPeriod, PeriodEvent, PurchaseIntent } from '@/lib/types';
+import type { BudgetItem, BudgetLedgerLinks, BudgetPeriod, PeriodEvent, PurchaseIntent } from '@/lib/types';
 
 const periodId = ref('');
 const itemId = ref('');
 const period = ref<BudgetPeriod | null>(null);
 const intents = ref<PurchaseIntent[]>([]);
 const events = ref<PeriodEvent[]>([]);
+const actualLinks = ref<BudgetLedgerLinks | null>(null);
 const loading = ref(true);
 const error = ref('');
 
 const item = computed<BudgetItem | null>(() => period.value?.items.find(value => value.itemId === itemId.value) ?? null);
 const latestIntent = computed(() => intents.value.find(value => value.periodId === periodId.value && value.budgetItemId === itemId.value) ?? null);
-const canFindOffers = computed(() => period.value?.period.status === 'active' && item.value?.kind === 'planned_spend' && item.value?.status === 'planned');
+const itemActual = computed(() => actualLinks.value?.items.find(value => value.itemId === itemId.value) ?? null);
+const canFindOffers = computed(() => period.value?.period.status === 'active' && item.value?.kind === 'planned_spend'
+  && item.value?.status === 'planned' && !itemActual.value?.coveredMinor);
 const relatedEvents = computed(() => events.value.filter(event => {
   const itemMatches = event.data.itemId === itemId.value || event.data.budgetItemId === itemId.value;
   const intentMatches = latestIntent.value && event.data.purchaseIntentId === latestIntent.value.purchaseIntentId;
@@ -32,7 +35,8 @@ const relatedEvents = computed(() => events.value.filter(event => {
 const eventLabel = (type: string) => ({ budget_item_created: '创建计划项目', budget_item_changed: '修改计划项目',
   budget_item_cancelled: '取消计划项目', purchase_intent_proposed: '生成购买确认', purchase_intent_expired: '购买确认已过期',
   purchase_intent_rejected: '放弃本次购买', purchase_committed: '确认购买并建立订单', payment_handoff_requested: '进入付款处理',
-  order_aftercare_accepted: '提交订单善后', verified_money_event: '核验资金结果' }[type] ?? '计划状态已更新');
+  order_aftercare_accepted: '提交订单善后', verified_money_event: '核验资金结果',
+  budget_ledger_linked: '已入账支出关联此计划', budget_ledger_unlinked: '已解除支出关联' }[type] ?? '计划状态已更新');
 
 useLoad((options) => { periodId.value = options.periodId ?? ''; itemId.value = options.itemId ?? ''; });
 useDidShow(() => { if (periodId.value && itemId.value) void load(); });
@@ -41,12 +45,14 @@ async function load() {
   loading.value = true;
   error.value = '';
   try {
-    const [periodResult, intentResult, eventResult] = await Promise.all([
+    const [periodResult, intentResult, eventResult, linkResult] = await Promise.all([
       api.period(periodId.value), api.purchaseIntents(), api.periodEvents(periodId.value),
+      api.budgetLedgerLinks(periodId.value),
     ]);
     period.value = periodResult.data;
     intents.value = intentResult.data.intents;
     events.value = eventResult.data.events;
+    actualLinks.value = linkResult.data;
   } catch (reason) {
     error.value = errorMessage(reason);
   } finally {
@@ -68,10 +74,12 @@ function offers() { void Taro.navigateTo({url:`/pages/offers/index?periodId=${pe
     </StatePanel>
     <template v-else>
       <SectionCard class="summary-card">
-        <view class="summary-heading"><view class="plan-icon">{{item.priority==='required'?'必':'愿'}}</view><view><text class="eyebrow">{{item.priority==='required'?'必须保留':'可以调整'}}</text><text class="plan-title">{{item.title}}</text></view><StatusBadge :label="item.status==='committed'?'已形成承诺':item.status==='planned'?'计划中':item.status" :tone="item.status==='cancelled'?'neutral':'success'"/></view>
+        <view class="summary-heading"><view class="plan-icon">{{item.priority==='required'?'必':'愿'}}</view><view><text class="eyebrow">{{item.priority==='required'?'必须保留':'可以调整'}}</text><text class="plan-title">{{item.title}}</text></view><StatusBadge :label="item.status==='committed'?'已形成承诺':item.status==='planned'?'计划中':item.status==='settled'?'已完成':'已取消'" :tone="item.status==='cancelled'||item.status==='settled'?'neutral':'success'"/></view>
         <text class="plan-amount amount">{{yuan(item.userEstimatedAmountMinor)}}</text>
         <view class="summary-meta"><text>{{shortDate(item.plannedOn)}}</text><text>{{item.kind==='essential_expense'?'必要支出':item.kind==='expected_income'?'预计收入':'计划消费'}}</text></view>
       </SectionCard>
+
+      <SectionCard v-if="itemActual?.coveredMinor" class="block"><text class="purchase-title">计划与实际</text><FactRow label="已入账支出覆盖" :value="yuan(itemActual.coveredMinor)"/><FactRow label="仍待发生" :value="yuan(itemActual.remainingMinor)"/><text class="purchase-meta">已发生金额已经在账户余额中计算，预测只保留尚未发生的部分。若关联有误，请在账目详情解除。</text></SectionCard>
 
       <SectionHeader title="当前资金影响" action="完整分析" @action="impact"/>
       <SectionCard class="impact-card" @tap="impact">
@@ -94,7 +102,7 @@ function offers() { void Taro.navigateTo({url:`/pages/offers/index?periodId=${pe
 
       <SectionHeader title="计划操作" />
       <view class="action-grid">
-        <button v-if="period.period.status!=='closed'" class="secondary-button" @tap="edit">修改或取消</button>
+        <button v-if="period.period.status!=='closed'&&item.status==='planned'&&!itemActual?.coveredMinor" class="secondary-button" @tap="edit">修改或取消</button>
         <button class="secondary-button" @tap="impact">重新查看影响</button>
         <button class="secondary-button action-wide" @tap="Taro.switchTab({url:'/pages/ai/index'})">让行止解释这个计划</button>
       </view>
@@ -114,6 +122,7 @@ function offers() { void Taro.navigateTo({url:`/pages/offers/index?periodId=${pe
 
 <style lang="scss">
 @use '../../styles/tokens' as *;
+.block{margin-top:18px}
 .back{position:absolute;z-index:4;top:calc(34px + env(safe-area-inset-top));right:28px;width:64px;height:64px;color:$brand-deep;background:rgba(255,255,255,.72);border-radius:50%;font-size:44px}.retry{margin:20px auto 0}.summary-card{background:linear-gradient(145deg,#fff,#F3F8F5)}.summary-heading{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:start;gap:16px}.plan-icon{display:flex;width:56px;height:56px;align-items:center;justify-content:center;color:$brand-primary;background:$surface-tint;border-radius:16px;font-size:23px;font-weight:720}.eyebrow,.plan-title,.plan-amount,.summary-meta text,.purchase-title,.purchase-meta{display:block}.eyebrow{color:$text-secondary;font-size:20px}.plan-title{margin-top:6px;font-size:29px;font-weight:740;line-height:1.35;overflow-wrap:anywhere}.plan-amount{margin-top:28px;font-size:48px;font-weight:780;overflow-wrap:anywhere}.summary-meta{display:flex;flex-wrap:wrap;gap:10px 18px;margin-top:12px;color:$text-secondary;font-size:21px}.impact-card{cursor:pointer}.impact-arrow{color:$brand-primary;font-size:38px}.impact-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:20px 0 8px}.impact-grid view{min-width:0;padding:18px;background:$soft-surface;border-radius:15px}.impact-grid text,.impact-grid b{display:block}.impact-grid text{color:$text-secondary;font-size:20px}.impact-grid b{margin-top:8px;font-size:27px;overflow-wrap:anywhere}.purchase-title{font-size:26px;font-weight:700;overflow-wrap:anywhere}.purchase-meta{margin-top:7px;color:$text-secondary;font-size:20px;line-height:1.5}.full{width:100%;margin-top:16px}.offers-button{margin:18px auto 0}.action-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.action-grid button{width:100%}.action-wide{grid-column:1/-1}.boundary{margin-top:18px}.timeline-card{padding-top:10px;padding-bottom:10px}.timeline-row{display:grid;grid-template-columns:auto minmax(0,1fr);gap:14px;align-items:start;padding:15px 0}.timeline-row+.timeline-row{border-top:1px solid $border}.timeline-dot{box-sizing:content-box;width:12px;height:12px;margin-top:8px;background:$brand-primary;border:3px solid $surface-tint;border-radius:50%}.timeline-row text{display:block;font-size:22px}.timeline-row text+text{margin-top:5px;color:$text-secondary;font-size:19px}
 @media screen and (max-width:360px){.summary-heading{grid-template-columns:auto minmax(0,1fr)}.summary-heading .status-badge{grid-column:2;justify-self:start}.plan-amount{font-size:40px}.impact-grid,.action-grid{grid-template-columns:1fr}.action-wide{grid-column:auto}}
 </style>

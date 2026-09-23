@@ -20,8 +20,8 @@ const selected = ref<AgentRun | null>(null);
 const detailLoading = ref(false);
 const cancelling = ref(false);
 
-const stateLabel = (value: string) => value === 'RUNNING' ? '整理中' : value === 'SUCCEEDED' ? '已完成' : value === 'CANCELLED' ? '已停止' : '未完成';
-const stateTone = (value: string) => value === 'SUCCEEDED' ? 'success' as const : value === 'RUNNING' ? 'info' as const : value === 'FAILED' ? 'warning' as const : 'neutral' as const;
+const stateLabel = (value: string) => value === 'RUNNING' ? '整理中' : value === 'COMPLETED' ? '已完成' : value === 'CANCELLED' ? '已停止' : '未完成';
+const stateTone = (value: string) => value === 'COMPLETED' ? 'success' as const : value === 'RUNNING' ? 'info' as const : value === 'FAILED' ? 'warning' as const : 'neutral' as const;
 
 async function load(reset = true) {
   if (reset) { loading.value = true; error.value = ''; }

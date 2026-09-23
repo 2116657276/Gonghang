@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { readdir, readFile } from 'node:fs/promises';
@@ -305,6 +305,76 @@ test('B02/B07 新消费者 Agent 真实运行只保存待确认草稿',async()=>
   } finally {
     await resetModelLedger();
   }
+});
+
+test('F3.1 月度账目工具只向模型提供本人所选月汇总',async()=>{
+  const {createAssistantMessageEventStream}=await import('@earendil-works/pi-ai');
+  const {startConsumerAgentRun,executeConsumerAgentRun,readConsumerAgentRun}=await import('./consumer-agent-runtime.js');
+  const now=new Date();
+  const today=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit'}).format(now);
+  const ownerId=randomUUID(),accountId=randomUUID(),snapshotId=randomUUID(),periodId=randomUUID();
+  const monthStart=`${today.slice(0,7)}-01`;
+  const monthEnd=new Date(`${monthStart}T00:00:00Z`);
+  monthEnd.setUTCMonth(monthEnd.getUTCMonth()+1);monthEnd.setUTCDate(0);
+  await transaction(async client=>{
+    await client.query(`INSERT INTO users(id,email,display_name,role,password_hash)
+      VALUES($1,$2,'月度账目测试','consumer','disabled')`,[ownerId,`${ownerId}@test.local`]);
+    await client.query(`INSERT INTO finance_accounts
+      (id,owner_id,provider,account_type,provider_account_ref,masked_identifier,display_name,source,authorized_at)
+      VALUES($1,$2,'demo','debit',$3,'****F31','月度汇总测试账户','demo',$4)`,
+    [accountId,ownerId,`F31-${accountId}`,now]);
+    await client.query(`INSERT INTO finance_account_snapshots
+      (id,account_id,available_balance_minor,current_balance_minor,as_of,covered_through_at,fact_status,source)
+      VALUES($1,$2,200000,200000,$3,$3,'observed','demo')`,[snapshotId,accountId,now]);
+    await client.query(`INSERT INTO budget_periods
+      (id,owner_id,primary_account_id,baseline_snapshot_id,month_start,month_end,savings_target_minor,status)
+      VALUES($1,$2,$3,$4,$5,$6,0,'active')`,
+    [periodId,ownerId,accountId,snapshotId,monthStart,monthEnd.toISOString().slice(0,10)]);
+    for(const [direction,amount,category,note] of [
+      ['inflow',30000,'income','示例工资入账'],['outflow',1800,'food','示例早餐'],
+      ['outflow',300,'transport','示例地铁']] as const){
+      const entryId=randomUUID();
+      await client.query(`INSERT INTO finance_ledger_entries
+        (id,owner_id,account_id,source,source_ref,direction,amount_minor,occurred_at,posted_at,status,category,note,dedupe_key)
+        VALUES($1,$2,$3,'demo',$4,$5,$6,$7,$7,'posted',$8,$9,$4)`,
+      [entryId,ownerId,accountId,entryId,direction,amount,now,category,note]);
+    }
+  });
+  const user={id:ownerId,email:'',displayName:'',role:'consumer' as const};
+  const month=today.slice(0,7);
+  await resetModelLedger();
+  try{
+    const run=await startConsumerAgentRun(user,randomUUID(),{
+      message:'解释我选中月份的收支',periodId,ledgerMonth:month});
+    let calls=0;
+    await executeConsumerAgentRun(run.runId,user,'解释我选中月份的收支',periodId,
+      new AbortController().signal,(model,context)=>{
+        calls++;
+        if(calls===2){
+          const received=JSON.stringify(context.messages);
+          assert.match(received,/totalOutflowMinor/);
+          assert.match(received,/2100/);
+          assert.match(received,/totalInflowMinor/);
+          assert.match(received,/30000/);
+          assert.match(received,/accountSource/);
+          assert.match(received,/demo/);
+          assert.doesNotMatch(received,/示例早餐|示例地铁/);
+        }
+        const stream=createAssistantMessageEventStream();
+        const tool=calls===1;
+        stream.push({type:'done',reason:tool?'toolUse':'stop',message:{role:'assistant',api:model.api,
+          provider:model.provider,model:model.id,timestamp:Date.now(),stopReason:tool?'toolUse':'stop',
+          content:tool?[{type:'toolCall',id:'month-summary',name:'read_month_ledger_summary',
+            arguments:{month}}]:[{type:'text',text:'已按该月已入账汇总说明。'}],
+          usage:{input:10,cacheRead:0,cacheWrite:0,output:5,totalTokens:15,
+            cost:{input:0,cacheRead:0,cacheWrite:0,output:0,total:0}}}});
+        return stream;
+      });
+    const result=await readConsumerAgentRun(user,run.runId);
+    assert.equal(result.state,'COMPLETED');
+    assert.equal(result.toolCalls,1);
+    assert.equal(calls,2);
+  }finally{await resetModelLedger();}
 });
 
 const { processChannelJob } = await import('./channel-worker.js');
@@ -1100,6 +1170,18 @@ test('M1 收口 4：展示分类纠正不改原流水、资金版本或预算评
   const accounts=await app.inject({method:'GET',url:'/api/finance/accounts',cookies:{xingzhi_session:session.token}});
   const shown=accounts.json().data.accounts[0].ledger.find((row:{entryId:string})=>row.entryId===entry);
   assert.equal(shown.originalCategory,'other');assert.equal(shown.displayCategory,'food');
+  const refundEntry=randomUUID();
+  await pool.query(`INSERT INTO finance_ledger_entries
+    (id,owner_id,account_id,source,source_ref,direction,amount_minor,occurred_at,posted_at,status,category,merchant_name,dedupe_key)
+    VALUES($1,$2,$3,'demo',$4,'inflow',1200,now(),now(),'posted','refund','原订单退款',$4)`,
+  [refundEntry,f.ids.user,f.ids.account,`M1-refund-${refundEntry}`]);
+  const refundChanged=await app.inject({method:'PATCH',url:`/api/finance/ledger/${refundEntry}/category`,
+    cookies:{xingzhi_session:session.token},headers:{origin:config.webOrigin,'idempotency-key':randomUUID()},payload:{category:'food'}});
+  assert.equal(refundChanged.statusCode,200,refundChanged.body);
+  const refreshed=await app.inject({method:'GET',url:'/api/finance/accounts',cookies:{xingzhi_session:session.token}});
+  const shownRefund=refreshed.json().data.accounts[0].ledger.find((row:{entryId:string})=>row.entryId===refundEntry);
+  assert.equal(shownRefund.displayCategory,'food');assert.equal(shownRefund.isRefund,true);
+  assert.equal(shownRefund.summary,'原订单退款');
 });
 
 test('M1 收口 5：隔离场景可重复且不覆盖状态，账单内分期不重复计算，跨日期拒绝',async()=>{
@@ -1140,6 +1222,31 @@ test('M1 收口 5：隔离场景可重复且不覆盖状态，账单内分期不
   assert.equal(Number((await pool.query('SELECT savings_target_minor FROM budget_periods WHERE id=$1',[first.periodId])).rows[0].savings_target_minor),60000);
   const yesterday=new Date(now.getTime()-86_400_000).toISOString().slice(0,10);
   await assert.rejects(transaction(client=>seedConsumerDemoScenario(client,{scenarioKey:key,serviceOn:yesterday,password:'x',now})),/当前上海日期/);
+});
+
+test('登录连续失败后短暂限制 H5 与小程序入口，窗口过期后可恢复',async()=>{
+  const {hashPassword}=await import('../auth/password.js');
+  const id=randomUUID();
+  const email=`login-limit-${id}@test.local`;
+  const digest=createHash('sha256').update(email).digest('hex');
+  await pool.query(`INSERT INTO users(id,email,display_name,role,password_hash)
+    VALUES($1,$2,'登录限制测试','consumer',$3)`,[id,email,await hashPassword('correct-test-password')]);
+  for(let attempt=0;attempt<5;attempt++){
+    const result=await app.inject({method:'POST',url:'/api/miniapp/sessions',
+      payload:{email,password:'wrong-test-password'}});
+    assert.equal(result.statusCode,401,result.body);
+  }
+  const blocked=await app.inject({method:'POST',url:'/api/sessions',
+    headers:{origin:config.webOrigin},payload:{email,password:'correct-test-password'}});
+  assert.equal(blocked.statusCode,429,blocked.body);
+  await pool.query(`UPDATE login_attempt_limits SET blocked_until=now()-interval '1 minute',
+    window_started_at=now()-interval '16 minutes' WHERE identity_digest=$1`,
+  [digest]);
+  const restored=await app.inject({method:'POST',url:'/api/miniapp/sessions',
+    payload:{email,password:'correct-test-password'}});
+  assert.equal(restored.statusCode,200,restored.body);
+  assert.equal((await pool.query('SELECT 1 FROM login_attempt_limits WHERE identity_digest=$1',
+    [digest])).rowCount,0);
 });
 
 test('M1 收口 3：最终文案失败后草稿产物仍可恢复，运行列表可按无周期稳定读取',async()=>{

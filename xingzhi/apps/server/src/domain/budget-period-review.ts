@@ -7,6 +7,7 @@ type PeriodRow = { id: string; accountId: string; status: 'draft' | 'active' | '
 type ChangeRow = { previousTargetMinor: string; newTargetMinor: string };
 type LedgerRow = { direction: 'inflow' | 'outflow'; amountMinor: number;
   category: string | null; orderId: string | null };
+type PlanActualRow = { coveredMinor: string; remainingMinor: string };
 type MoneyRow = { orderId: string; eventType: string; amountMinor: string;
   verificationState: string };
 type BatchRow = { orderId: string; amountMinor: number; status: string };
@@ -47,6 +48,20 @@ export async function reviewBudgetPeriod(db: FinanceDb, ownerId: string, periodI
       AND (occurred_at AT TIME ZONE 'Asia/Shanghai')::date BETWEEN $4::date AND $5::date
     ORDER BY occurred_at,id`, [ownerId, period.accountId, period.source,
     period.monthStart, period.monthEnd, now])).rows;
+  const planActual = (await db.query<PlanActualRow>(`SELECT
+    COALESCE((SELECT SUM(l.covered_minor) FROM budget_ledger_links l
+      JOIN finance_ledger_entries e ON e.id=l.entry_id
+      WHERE l.period_id=$1 AND l.owner_id=$2
+        AND l.linked_at<=$3 AND (l.unlinked_at IS NULL OR l.unlinked_at>$3)
+        AND e.status='posted'
+        AND e.posted_at<=$3 AND e.occurred_at<=$3),0)::text AS "coveredMinor",
+    COALESCE((SELECT SUM(GREATEST(0,i.user_estimated_amount_minor-
+      COALESCE((SELECT SUM(l.covered_minor) FROM budget_ledger_links l
+        WHERE l.item_id=i.id AND l.linked_at<=$3
+          AND (l.unlinked_at IS NULL OR l.unlinked_at>$3)),0)))
+      FROM budget_items i WHERE i.period_id=$1 AND i.owner_id=$2
+        AND i.status='planned' AND i.kind<>'expected_income'),0)::text AS "remainingMinor"`,
+  [periodId, ownerId, now])).rows[0]!;
   const orders = (await db.query<OrderRow>(`SELECT id,payment_status AS "paymentStatus"
     FROM orders WHERE owner_id=$1 AND budget_period_id=$2 AND created_at<=$3
     ORDER BY created_at,id`, [ownerId, periodId, now])).rows;
@@ -134,6 +149,11 @@ export async function reviewBudgetPeriod(db: FinanceDb, ownerId: string, periodI
       .map((row) => row.amountMinor)),
     confirmedPeriodInflowMinor: safeSum(ledger.filter((row) => row.direction === 'inflow')
       .map((row) => row.amountMinor)),
+    linkedActualExpenseMinor: safeAmount(planActual.coveredMinor),
+    remainingPlannedExpenseMinor: safeAmount(planActual.remainingMinor),
+    unlinkedPostedExpenseMinor: Math.max(0, safeSum(ledger.filter((row) =>
+      row.direction === 'outflow' && row.orderId === null).map((row) => row.amountMinor))
+      - safeAmount(planActual.coveredMinor)),
     classifiedUnexpectedExpenseMinor: safeSum(ledger.filter((row) => row.direction === 'outflow'
       && ['unexpected', 'emergency'].includes(row.category ?? '')).map((row) => row.amountMinor)),
     confirmedOrderPaymentsMinor: confirmedPayments,

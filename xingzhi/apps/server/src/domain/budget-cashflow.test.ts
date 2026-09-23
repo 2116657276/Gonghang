@@ -8,7 +8,7 @@ import { pool, closePool } from '../db/client.js';
 import { seedConsumerFinanceDemo } from '../db/consumer-finance-demo.js';
 import { registerPlanningDraftApi } from '../routes/planning-drafts.js';
 import { loadFinanceAccountFacts } from './finance-facts.js';
-import { forecastBudgetCashflow } from './budget-cashflow.js';
+import { forecastBudgetCashflow, previewBudgetItemChange, previewBudgetItemImpact } from './budget-cashflow.js';
 import { budgetPlanningDraftPort } from './budget-planning-draft-port.js';
 
 test('A03 reads one owned period, evaluates B02 drafts and never writes budget/order facts', async () => {
@@ -43,6 +43,23 @@ test('A03 reads one owned period, evaluates B02 drafts and never writes budget/o
     assert.equal(month.forecast.minimumSavingsHeadroomMinor, 20000);
     assert.equal(month.forecast.periodEndSavableMinor, 70000);
     assert.equal(month.forecast.daily.at(-1)?.on, fixture.monthEnd);
+    const dinnerId = (await client.query<{ id: string }>(`SELECT id FROM budget_items
+      WHERE period_id=$1 AND owner_id=$2 AND title='朋友聚餐'`,
+    [fixture.periodId, fixture.ownerId])).rows[0]!.id;
+    const itemImpact = await previewBudgetItemImpact(client, fixture.ownerId, fixture.periodId, dinnerId);
+    assert.equal(itemImpact.withItem.minimumSavingsHeadroomMinor, 20000);
+    assert.equal(itemImpact.withoutItem.minimumSavingsHeadroomMinor, 28000);
+    const changed = await previewBudgetItemChange(client, fixture.ownerId, fixture.periodId, {
+      periodId: fixture.periodId, itemId: dinnerId, expectedPeriodVersion: periodVersion,
+      expectedFinancialVersion: financialVersion, kind: 'planned_spend', title: '朋友聚餐',
+      categoryCode: null, plannedOn: fixture.monthEnd, userEstimatedAmountMinor: 4000,
+      priority: 'adjustable', changeReason: '缩减本月聚餐预算',
+    });
+    assert.equal(changed.before.minimumSavingsHeadroomMinor, 20000);
+    assert.equal(changed.after.minimumSavingsHeadroomMinor, 24000);
+    assert.equal(Number((await client.query<{ count: string }>(
+      'SELECT count(*) FROM budget_items WHERE period_id=$1', [fixture.periodId],
+    )).rows[0]!.count), itemCount);
     await client.query('SAVEPOINT empty_profile');
     const emptyAccountId = randomUUID();
     const emptySnapshotId = randomUUID();

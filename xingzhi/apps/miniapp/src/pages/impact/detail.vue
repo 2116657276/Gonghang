@@ -10,21 +10,29 @@ import StatusBadge from '@/components/StatusBadge.vue';
 import { api } from '@/lib/api';
 import { errorMessage } from '@/lib/errors';
 import { fundingLabel, shortDate, yuan } from '@/lib/format';
-import type { BudgetItem, BudgetPeriod } from '@/lib/types';
+import type { BudgetItem, BudgetItemImpact, BudgetPeriod } from '@/lib/types';
 
 const periodId = ref('');
 const itemId = ref('');
 const period = ref<BudgetPeriod | null>(null);
+const itemImpact = ref<BudgetItemImpact | null>(null);
 const loading = ref(true);
 const error = ref('');
 
 const item = computed<BudgetItem | null>(() => period.value?.items.find(value => value.itemId === itemId.value) ?? null);
 const status = computed(() => period.value?.forecast.status ?? 'unknown');
-const surplus = computed(() => {
-  const minimum = period.value?.basis.minimumProjectedCashMinor;
-  if (minimum === null || minimum === undefined || !period.value) return null;
-  return minimum - period.value.basis.savingsTargetMinor;
+const surplus = computed(() => period.value?.basis.minimumSavingsHeadroomMinor ?? null);
+const itemHeadroomImpact = computed(() => {
+  const withItem = itemImpact.value?.withItem.minimumSavingsHeadroomMinor;
+  const withoutItem = itemImpact.value?.withoutItem.minimumSavingsHeadroomMinor;
+  return withItem === null || withItem === undefined || withoutItem === null || withoutItem === undefined
+    ? null : withItem - withoutItem;
 });
+const minimumDay = computed(() => period.value?.forecast.daily.find(
+  day => day.on === period.value?.forecast.minimumCashOn,
+) ?? null);
+const eventLabel = (kind: string) => ({ planned_expense: '计划支出', repayment: '还款义务',
+  committed_order: '已承诺订单', confirmed_future_cash: '已确认入账' }[kind] ?? '资金事项');
 const statusCopy = computed(() => ({
   allowed: { title: '符合当前资金约束', detail: '按现有账户事实和计划安排，预计不会低于保留目标。', tone: 'success' as const },
   needs_adjustment: { title: '需要调整后再继续', detail: '当前安排预计会产生缺口，可以调整金额、日期或其他可调计划。', tone: 'warning' as const },
@@ -46,6 +54,14 @@ useLoad(async (options) => {
   itemId.value = options.itemId ?? '';
   try {
     period.value = (await api.period(periodId.value)).data;
+    if (item.value?.status === 'planned') {
+      const preview = (await api.budgetItemImpact(periodId.value, itemId.value)).data;
+      if (preview.financialVersion !== period.value.basis.financialVersion
+        || preview.periodVersion !== period.value.basis.periodVersion) {
+        throw new Error('资金或计划依据已经变化，请返回后重新查看。');
+      }
+      itemImpact.value = preview;
+    }
   } catch (reason) {
     error.value = errorMessage(reason);
   } finally {
@@ -75,6 +91,8 @@ useLoad(async (options) => {
         <FactRow label="保留目标" :value="yuan(period.basis.savingsTargetMinor)"/>
         <FactRow label="关键日期" :value="shortDate(period.basis.minimumCashOn)"/>
         <FactRow v-if="item" label="当前计划" :value="`${item.title} · ${yuan(item.userEstimatedAmountMinor)}`"/>
+        <FactRow v-if="item" label="该项对最低余量的影响" :value="itemHeadroomImpact===null?'依据不足':yuan(itemHeadroomImpact)"/>
+        <view v-if="minimumDay?.events.length" class="date-list"><text>最低日资金事项</text><text v-for="event in minimumDay.events" :key="`${event.kind}-${event.referenceId}`">{{eventLabel(event.kind)}} {{event.deltaMinor>0?'+':''}}{{yuan(event.deltaMinor)}}</text></view>
         <view v-if="period.forecast.affectedDates.length" class="date-list"><text>其他受影响日期</text><text>{{period.forecast.affectedDates.map(shortDate).join('、')}}</text></view>
       </SectionCard>
 
@@ -96,7 +114,7 @@ useLoad(async (options) => {
         <button v-if="item" class="primary-button" @tap="Taro.navigateTo({url:`/pages/item/detail?periodId=${periodId}&itemId=${itemId}`})">返回计划详情</button>
         <button class="secondary-button" @tap="Taro.switchTab({url:'/pages/ai/index'})">问问行止如何调整</button>
       </view>
-      <view class="notice notice--info boundary">本页只解释当前服务端结论，不会自动修改计划或执行资金动作。</view>
+      <view class="notice notice--info boundary">周期结论反映本月全部安排；单项影响比较同一资金依据下包含和移除该未承诺项目的结果。本页不会修改计划或执行资金动作。</view>
     </template>
   </PageShell>
 </template>

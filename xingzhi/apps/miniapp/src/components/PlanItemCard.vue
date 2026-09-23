@@ -1,23 +1,27 @@
 <script setup lang="ts">
+import { computed } from 'vue';
 import StatusBadge from './StatusBadge.vue';
 import type { BudgetItem } from '@/lib/types';
 import { fundingLabel, shortDate, yuan } from '@/lib/format';
 
 const props = defineProps<{
   item: BudgetItem;
-  group: 'active' | 'attention' | 'draft';
+  group: 'active' | 'attention' | 'draft' | 'ended';
   forecastStatus: 'allowed' | 'needs_adjustment' | 'blocked' | 'unknown';
   supportingText: string;
 }>();
 
-defineEmits<{ open: [] }>();
+const emit = defineEmits<{ open: []; impact: []; ask: [] }>();
+function openAction() { if (props.group === 'attention') emit('impact'); else emit('open'); }
 
-const icon = props.item.priority === 'required' ? '必' : '愿';
-const groupCopy = props.group === 'draft'
+const icon = computed(() => props.item.priority === 'required' ? '必' : '愿');
+const groupCopy = computed(() => props.group === 'ended'
+  ? { label: props.item.status === 'cancelled' ? '已取消' : '已完成', tone: 'neutral' as const, action: '查看记录' }
+  : props.group === 'draft'
   ? { label: '草稿待完善', tone: 'neutral' as const, action: '继续完善' }
   : props.group === 'attention'
     ? { label: fundingLabel(props.forecastStatus), tone: props.forecastStatus === 'unknown' ? 'info' as const : 'warning' as const, action: '看看影响' }
-    : { label: props.item.status === 'committed' ? '已形成承诺' : '进行中', tone: 'success' as const, action: '查看详情' };
+    : { label: props.item.status === 'committed' ? '已形成承诺' : '进行中', tone: 'success' as const, action: '查看详情' });
 </script>
 
 <template>
@@ -35,7 +39,8 @@ const groupCopy = props.group === 'draft'
         <StatusBadge :label="groupCopy.label" :tone="groupCopy.tone" />
         <text class="plan-item__support">{{ supportingText }}</text>
       </view>
-      <button class="link-button">{{ groupCopy.action }} ›</button>
+      <button class="link-button" @tap.stop="openAction">{{ groupCopy.action }} ›</button>
+      <button v-if="group!=='ended'" class="link-button" @tap.stop="emit('ask')">问行止</button>
     </view>
   </view>
 </template>

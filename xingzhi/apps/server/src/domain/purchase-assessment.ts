@@ -39,6 +39,10 @@ export async function readPurchaseItem(client: PoolClient, ownerId: string, peri
   if (item.kind !== 'planned_spend' || item.status !== 'planned') {
     throw new AppError(409, 'ITEM_NOT_ORDERABLE', '只有尚未下单的计划支出可购买。');
   }
+  if ((await client.query(`SELECT 1 FROM budget_ledger_links
+    WHERE item_id=$1 AND owner_id=$2 AND active LIMIT 1`, [budgetItemId, ownerId])).rowCount) {
+    throw new AppError(409, 'ITEM_NOT_ORDERABLE', '已有实际支出关联的项目不能再次购买。');
+  }
   await expireStalePurchaseIntents(client, ownerId, budgetItemId);
   const existing = await client.query(`SELECT 1 FROM purchase_intents
     WHERE budget_item_id=$1 AND owner_id=$2 AND status IN ('proposed','confirmed','ordered')

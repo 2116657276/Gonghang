@@ -7,14 +7,14 @@ import StatePanel from '@/components/StatePanel.vue';
 import { useOverview } from '@/composables/useOverview';
 import { api } from '@/lib/api';
 import { errorMessage } from '@/lib/errors';
-import { minorFromYuan, yuanInput } from '@/lib/format';
+import { dateKey, minorFromYuan, yuanInput } from '@/lib/format';
 import type { BudgetPeriod } from '@/lib/types';
 
 const overview=useOverview();
 const period=ref<BudgetPeriod|null>(null);
 const periodId=ref('');
 const accountIndex=ref(0);
-const monthStart=ref(`${new Date().toISOString().slice(0,7)}-01`);
+const monthStart=ref(`${dateKey(new Date().toISOString()).slice(0,7)}-01`);
 const target=ref('500');
 const reason=ref('调整本月保留目标');
 const loading=ref(true);const saving=ref(false);const error=ref('');

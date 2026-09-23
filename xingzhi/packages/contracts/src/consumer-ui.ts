@@ -27,6 +27,18 @@ export type LedgerEntry = {
   entryId: string; direction: 'inflow' | 'outflow'; amountMinor: number;
   occurredAt: string; postedAt: string | null; status: 'pending' | 'posted' | 'reversed';
   displayCategory: string | null; category: string | null; orderId: string | null;
+  source: string; summary: string | null; isRefund: boolean;
+  linkedPlan: null | { linkId: string; periodId: string; itemId: string; title: string;
+    coveredMinor: number };
+};
+export type BudgetLedgerLinks = {
+  periodId: string; accountId: string; periodStatus: string; accountStatus: string;
+  financialVersion: number; periodVersion: number;
+  items: Array<{ itemId: string; title: string; kind: string; status: string;
+    estimatedMinor: number; coveredMinor: number; remainingMinor: number; eligible: boolean }>;
+  links: Array<{ linkId: string; itemId: string; entryId: string; itemTitle: string;
+    coveredMinor: number; entryAmountMinor: number; active: boolean;
+    linkedAt: string; unlinkedAt: string | null }>;
 };
 export type FinanceAccountFacts = {
   account: { accountId: string; provider: string; accountType: string; maskedIdentifier: string; displayName: string;
@@ -48,9 +60,25 @@ export type BudgetPeriod = {
   basis: { financialVersion: number; periodVersion: number; asOf?: string | null; confirmedCashMinor: number | null;
     savingsTargetMinor: number; essentialRemainingMinor: number; adjustablePlannedMinor: number; committedOrdersMinor: number;
     expectedIncomeMinor: number; pendingRefundMinor: number; minimumProjectedCashMinor: number | null;
-    minimumCashOn: string | null; dataStatus: string };
+    minimumSavingsHeadroomMinor: number | null; minimumCashOn: string | null; dataStatus: string };
   forecast: { status: 'allowed' | 'needs_adjustment' | 'blocked' | 'unknown'; shortfallMinor: number | null;
-    affectedDates: string[]; reasonCodes: string[] };
+    minimumProjectedCashMinor: number | null; minimumSavingsHeadroomMinor: number | null; minimumCashOn: string | null;
+    affectedDates: string[]; reasonCodes: string[]; daily: Array<{ on: string; projectedCashMinor: number | null;
+      savingsHeadroomMinor: number | null; cashShortfallMinor: number | null; savingsShortfallMinor: number | null;
+      dataStatus: 'observed' | 'unknown'; events: Array<{ on: string; deltaMinor: number;
+        kind: 'planned_expense' | 'repayment' | 'committed_order' | 'confirmed_future_cash'; referenceId: string }> }> };
+};
+export type RollingCashflow = {
+  periodId: string; accountId: string; financialVersion: number; periodVersion: number;
+  asOf: string | null; conditionalIncomeMinor: number; forecast: BudgetPeriod['forecast'];
+};
+export type BudgetItemImpact = {
+  periodId: string; itemId: string; financialVersion: number; periodVersion: number;
+  withItem: BudgetPeriod['forecast']; withoutItem: BudgetPeriod['forecast'];
+};
+export type BudgetItemChangePreview = {
+  periodId: string; itemId: string | null; financialVersion: number; periodVersion: number;
+  before: BudgetPeriod['forecast']; after: BudgetPeriod['forecast'];
 };
 export type AgentRun = { id: string; budgetPeriodId: string | null; state: string; output: string; errorCode: string | null;
   createdAt?: string; finishedAt?: string | null; artifacts: Array<{ type: 'planning_draft'; draftId: string }> };

@@ -7,6 +7,7 @@ import { config } from '../config.js';
 import { pool, closePool } from '../db/client.js';
 import { seedConsumerCatalog } from '../db/consumer-catalog.js';
 import { consumerPlanningAgentTools, consumerPlanningToolNames } from './consumer-planning-tools.js';
+import { constrainAgentDraftToMessage } from './consumer-agent-runtime.js';
 import type { PlanningDraftPort } from './planning-draft-port.js';
 import { registerPlanningDraftApi } from '../routes/planning-drafts.js';
 
@@ -172,11 +173,31 @@ test('B02 planning drafts keep demand, budget and Agent execution boundaries sep
 
     const tools = consumerPlanningAgentTools({
       read_budget_basis: async () => ({}),
+      read_month_ledger_summary: async () => ({}),
       search_offers: async () => ({}),
       save_planning_draft: async () => ({}),
     });
     assert.deepEqual(tools.map((tool) => tool.name), [...consumerPlanningToolNames]);
     assert.ok(!tools.some((tool) => ['create_order', 'request_payment', 'pause_purchases', 'submit_change'].includes(tool.name)));
+    const modelItem = { title: '朋友聚餐', plannedOn: day,
+      userEstimatedAmountMinor: 10000, priority: 'required' as const,
+      requirements: [], catalogItemId: dinner.id, suggestion: null };
+    const notStated = constrainAgentDraftToMessage([modelItem], '我想和朋友聚餐，预算大概再讨论')[0]!;
+    assert.equal(notStated.plannedOn, null);
+    assert.equal(notStated.userEstimatedAmountMinor, null);
+    assert.equal(notStated.priority, null);
+    assert.equal(notStated.catalogItemId, null);
+    assert.equal(notStated.suggestion?.estimatedAmountMinor, 10000);
+    assert.equal(notStated.suggestion?.catalogItemId, dinner.id);
+    const stated = constrainAgentDraftToMessage([{ ...modelItem, catalogItemId: null }],
+      `我在 ${day} 有一笔必要支出 ¥100，必须保留`)[0]!;
+    assert.equal(stated.plannedOn, day);
+    assert.equal(stated.userEstimatedAmountMinor, 10000);
+    assert.equal(stated.priority, 'required');
+    assert.equal(constrainAgentDraftToMessage([{ ...modelItem, catalogItemId: null }],
+      `我在 ${day} 有一笔必要支出 ¥1000，必须保留`)[0]!.userEstimatedAmountMinor, null);
+    assert.equal(constrainAgentDraftToMessage([modelItem, { ...modelItem, title: '地铁' }],
+      `我在 ${day} 有两项支出共 ¥100，必须保留`)[0]!.userEstimatedAmountMinor, null);
 
     unavailableApp.addHook('preHandler', async (request) => {
       request.authUser = { id: ownerId, email: '', displayName: '', role: 'consumer' };

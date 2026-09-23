@@ -30,21 +30,21 @@ async function toggle(key: keyof Preferences) {
 }
 useDidShow(() => void load());
 const rows: Array<{ key: keyof Preferences; title: string; detail: string }> = [
-  { key: 'planning', title: '计划变化', detail: '周期状态、资金判断和计划需要调整时提醒。' },
-  { key: 'orders', title: '订单处理', detail: '购买确认、待付款和处理结果发生变化时提醒。' },
-  { key: 'refunds', title: '退款到账', detail: '退款渠道状态或账户到账事实发生变化时提醒。' },
+  { key: 'planning', title: '计划提示', detail: '筛选首页的近期还款与 AI 运行摘要；逾期事项仍保留。' },
+  { key: 'orders', title: '订单处理', detail: '筛选首页的购买确认、待付款和待查单摘要。' },
+  { key: 'refunds', title: '退款处理', detail: '筛选首页的退款处理中摘要。' },
 ];
 </script>
 
 <template>
-  <PageShell title="消息通知" subtitle="管理当前账号的提醒偏好" compact>
+  <PageShell title="应用内提醒" subtitle="管理首页提示摘要的显示偏好" compact>
     <template #hero><button class="back" @tap="Taro.navigateBack()">‹</button></template>
     <StatePanel v-if="loading" title="正在读取通知偏好" />
     <StatePanel v-else-if="error&&!saving" title="通知偏好暂时不可用" :detail="error" tone="error"><button class="secondary-button retry" @tap="load">重新加载</button></StatePanel>
     <template v-else><view v-if="savedNotice" class="notice notice--info saved">设置已同步到当前账号</view>
     <view v-if="error" class="notice notice--error saved">{{error}}</view>
     <SectionCard><button v-for="row in rows" :key="row.key" class="preference" :disabled="saving" @tap="toggle(row.key)"><view><text>{{ row.title }}</text><text>{{ row.detail }}</text></view><view class="switch" :class="{'switch--on':preferences[row.key]}"><view/></view></button></SectionCard>
-    <view class="notice notice--warning note">偏好已由服务端保存并可跨设备同步；微信订阅消息仍需在正式接入模板消息后由你单独授权。</view></template>
+    <view class="notice notice--warning note">这些设置只过滤首页提示摘要，不会隐藏逾期义务、待确认订单等必须处理的入口。偏好可跨设备同步；微信订阅消息尚未接入。</view></template>
   </PageShell>
 </template>
 

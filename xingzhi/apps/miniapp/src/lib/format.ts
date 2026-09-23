@@ -9,23 +9,23 @@ export function shortDate(value: string | null | undefined) {
   if (!value) return '日期待确认';
   const date = new Date(value.length === 10 ? `${value}T00:00:00+08:00` : value);
   if (Number.isNaN(date.getTime())) return value;
-  return `${date.getMonth() + 1}月${date.getDate()}日`;
+  const shanghai = new Date(date.getTime() + 8 * 60 * 60 * 1000);
+  return `${shanghai.getUTCMonth() + 1}月${shanghai.getUTCDate()}日`;
 }
 
 export function clockTime(value: string | null | undefined) {
   if (!value) return '时间未知';
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
-  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+  const shanghai = new Date(date.getTime() + 8 * 60 * 60 * 1000);
+  return `${String(shanghai.getUTCHours()).padStart(2, '0')}:${String(shanghai.getUTCMinutes()).padStart(2, '0')}`;
 }
 
 export function dateKey(value: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value.slice(0, 10);
-  const year = date.getFullYear();
-  const month = `${date.getMonth() + 1}`.padStart(2, '0');
-  const day = `${date.getDate()}`.padStart(2, '0');
-  return `${year}-${month}-${day}`;
+  // 财务日期统一使用上海时区，不随设备所在地改变月份归属。
+  return new Date(date.getTime() + 8 * 60 * 60 * 1000).toISOString().slice(0, 10);
 }
 
 export function minorFromYuan(value: string) {

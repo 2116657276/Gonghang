@@ -88,6 +88,22 @@ export async function seedConsumerDemoScenario(client: PoolClient, input: {
   [stableUuid(`${input.scenarioKey}:installment`), ownerId, liabilityAccountId, accountId,
     monthEnd, billId, `M1-${input.scenarioKey}-INSTALLMENT`]);
   if (mode === 'complete') {
+    // These posted Demo entries are already covered by the ¥2,000 snapshot at `now`.
+    // They make the bookkeeping view demonstrable without changing current cash.
+    const ledger = [
+      ['salary', 'inflow', 30000, 'income', null, '示例工资入账'],
+      ['breakfast', 'outflow', 1800, 'food', '示例早餐', null],
+      ['metro', 'outflow', 300, 'transport', '示例地铁', null],
+    ] as const;
+    for (const [code, direction, amount, category, merchantName, note] of ledger) {
+      const sourceRef = `M1-${input.scenarioKey}-${code}`;
+      await client.query(`INSERT INTO finance_ledger_entries
+          (id,owner_id,account_id,source,source_ref,direction,amount_minor,occurred_at,posted_at,
+            status,category,merchant_name,note,dedupe_key)
+        VALUES($1,$2,$3,'demo',$4,$5,$6,$7,$7,'posted',$8,$9,$10,$4)`,
+      [stableUuid(`${input.scenarioKey}:ledger:${code}`), ownerId, accountId, sourceRef,
+        direction, amount, now, category, merchantName, note]);
+    }
     await client.query(`INSERT INTO budget_periods
         (id,owner_id,primary_account_id,baseline_snapshot_id,month_start,month_end,
           savings_target_minor,status,necessities_confirmed_at)

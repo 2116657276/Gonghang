@@ -3,6 +3,7 @@ import type { AgentTool } from '@earendil-works/pi-agent-core';
 
 export const consumerPlanningToolNames = [
   'read_budget_basis',
+  'read_month_ledger_summary',
   'search_offers',
   'save_planning_draft',
 ] as const;
@@ -47,6 +48,14 @@ export function consumerPlanningAgentTools(handlers: Record<ToolName, ToolHandle
       parameters: Type.Object({}, { additionalProperties: false }),
     },
     {
+      name: 'read_month_ledger_summary' as const,
+      label: '读取月度账目汇总',
+      description: '按本次绑定的本人预算账户读取指定上海自然月的已入账收支、退款和分类汇总，不返回逐笔流水。',
+      parameters: Type.Object({
+        month: Type.String({ pattern: '^\\d{4}-(0[1-9]|1[0-2])$' }),
+      }, { additionalProperties: false }),
+    },
+    {
       name: 'search_offers' as const,
       label: '查询登记商品',
       description: '按日期和可选分类读取银行平台已登记候选，不创建选择或交易。',
@@ -75,7 +84,9 @@ export function consumerPlanningAgentTools(handlers: Record<ToolName, ToolHandle
         content: [{ type: 'text' as const, text: JSON.stringify(result) }],
         details: {
           source: definition.name === 'save_planning_draft'
-            ? 'validated_planning_draft' : 'local_planning_snapshot',
+            ? 'validated_planning_draft'
+            : definition.name === 'read_month_ledger_summary' ? 'posted_ledger_month_summary'
+              : 'local_planning_snapshot',
         },
       };
     },

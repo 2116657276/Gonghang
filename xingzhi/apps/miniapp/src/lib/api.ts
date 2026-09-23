@@ -1,5 +1,5 @@
 import Taro from '@tarojs/taro';
-import type { Adjustment, AdjustmentConfirmation, AdjustmentDetail, AftercareConfirmation, AftercarePreview, AgentRunSummary, ApiEnvelope, BudgetItemInput, BudgetPeriod, ConsumerOrder, ConsumerPreferences, FundingAssessment, Offer, OfferQuote, Operation, OrderAftercare, PaymentHandoff, PaymentReadiness, PaymentRecheck, PeriodEvent, PeriodReview, PlanningDraft, PurchaseIntent, PurchaseIntentProposal, RuntimeStatus, User } from './types';
+import type { Adjustment, AdjustmentConfirmation, AdjustmentDetail, AftercareConfirmation, AftercarePreview, AgentRunSummary, ApiEnvelope, BudgetItemChangePreview, BudgetItemImpact, BudgetItemInput, BudgetLedgerLinks, BudgetPeriod, ConsumerOrder, ConsumerPreferences, FundingAssessment, Offer, OfferQuote, Operation, OrderAftercare, PaymentHandoff, PaymentReadiness, PaymentRecheck, PeriodEvent, PeriodReview, PlanningDraft, PurchaseIntent, PurchaseIntentProposal, RollingCashflow, RuntimeStatus, User } from './types';
 import { ApiError, parseApiError } from './errors';
 import { apiBase, isH5Runtime } from './runtime-config';
 import { beginIdempotentRequest, completeIdempotentRequest } from './idempotency';
@@ -91,6 +91,22 @@ export const api = {
     }),
   periods: () => request<ApiEnvelope<{ periods: import('./types').BudgetPeriod[] }>>('/budget-periods'),
   period: (id: string) => request<ApiEnvelope<BudgetPeriod>>(`/budget-periods/${id}`),
+  rollingCashflow: (id: string) => request<ApiEnvelope<RollingCashflow>>(`/budget-periods/${id}/rolling-cashflow`),
+  budgetItemImpact: (periodId: string, itemId: string) => request<ApiEnvelope<BudgetItemImpact>>(
+    `/budget-periods/${periodId}/items/${itemId}/impact`,
+  ),
+  budgetLedgerLinks: (periodId: string) => request<ApiEnvelope<BudgetLedgerLinks>>(
+    `/budget-periods/${periodId}/ledger-links`),
+  linkBudgetLedger: (periodId: string, data: { entryId: string; itemId: string; coveredMinor: number;
+    expectedFinancialVersion: number; expectedPeriodVersion: number; confirmedByUser: true }) =>
+    request<ApiEnvelope<BudgetLedgerLinks>>(`/budget-periods/${periodId}/ledger-links`,
+      { method: 'POST', data }),
+  unlinkBudgetLedger: (periodId: string, linkId: string, expectedPeriodVersion: number) =>
+    request<ApiEnvelope<BudgetLedgerLinks>>(`/budget-periods/${periodId}/ledger-links/${linkId}/unlinks`,
+      { method: 'POST', data: { expectedPeriodVersion, confirmedByUser: true } }),
+  budgetItemChangePreview: (periodId: string, data: BudgetItemInput) => request<ApiEnvelope<BudgetItemChangePreview>>(
+    `/budget-periods/${periodId}/items/change-preview`, { method: 'POST', data, idempotent: false },
+  ),
   createPeriod: (data: { accountId: string; monthStart: string; savingsTargetMinor: number; expectedFinancialVersion: number }) =>
     request<ApiEnvelope<BudgetPeriod>>('/budget-periods', { method: 'POST', data }),
   changeSavingsTarget: (id: string, data: { newTargetMinor: number; expectedPeriodVersion: number; reason: string; confirmedByUser: true }) =>
@@ -103,9 +119,9 @@ export const api = {
     data.itemId ? `/budget-periods/${data.periodId}/items/${data.itemId}` : `/budget-periods/${data.periodId}/items`,
     { method: data.itemId ? 'PATCH' : 'POST', data },
   ),
-  cancelBudgetItem: (periodId: string, itemId: string, expectedPeriodVersion: number, reason: string) =>
+  cancelBudgetItem: (periodId: string, itemId: string, expectedPeriodVersion: number, reason: string, expectedFinancialVersion?: number) =>
     request<ApiEnvelope<{ item: import('./types').BudgetItem; basis: BudgetPeriod['basis'] }>>(`/budget-periods/${periodId}/items/${itemId}/cancellations`, {
-      method: 'POST', data: { periodId, itemId, expectedPeriodVersion, reason },
+      method: 'POST', data: { periodId, itemId, expectedPeriodVersion, reason, expectedFinancialVersion },
     }),
   planningDraft: (id: string) => request<ApiEnvelope<PlanningDraft>>(`/ai/planning-drafts/${id}`),
   acceptPlanningDraft: (id: string) => request<ApiEnvelope<PlanningDraft>>(`/ai/planning-drafts/${id}/acceptance`, {
@@ -143,7 +159,7 @@ export const api = {
   confirmAdjustment: (id: string, data: { acceptedOptionId: string; expectedFinancialVersion: number; expectedPeriodVersion: number; confirmedByUser: true }) => request<ApiEnvelope<AdjustmentConfirmation>>(`/adjustments/${id}/confirm`, { method: 'POST', data }),
   periodEvents: (id: string) => request<ApiEnvelope<{ events: PeriodEvent[] }>>(`/budget-periods/${id}/events`),
   periodReview: (id: string) => request<ApiEnvelope<PeriodReview>>(`/budget-periods/${id}/review`),
-  startAgent: (message: string, periodId: string | null) => request<ApiEnvelope<{ runId: string; reused: boolean; mode: string }>>('/ai/agent-runs', { method: 'POST', data: { message, periodId } }),
+  startAgent: (message: string, periodId: string | null, ledgerMonth: string | null = null) => request<ApiEnvelope<{ runId: string; reused: boolean; mode: string }>>('/ai/agent-runs', { method: 'POST', data: { message, periodId, ledgerMonth } }),
   agentRun: (id: string) => request<ApiEnvelope<import('./types').AgentRun>>(`/ai/agent-runs/${id}`),
   agentRuns: (cursor?: string) => request<ApiEnvelope<{ items: AgentRunSummary[]; nextCursor: string | null }>>(
     `/ai/agent-runs${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''}`,

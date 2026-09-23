@@ -1,6 +1,7 @@
 import Taro from '@tarojs/taro';
 import type { User } from './types';
 import { clearAllIdempotencyKeys } from './idempotency';
+import { clearAiQuestion } from './ai-entry';
 import { isH5Runtime } from './runtime-config';
 
 const MINIAPP_SESSION_KEY = 'xingzhi_miniapp_session_v1';
@@ -37,4 +38,5 @@ export function cachedSessionUser(): User | null {
 export function clearClientSession() {
   Taro.removeStorageSync(MINIAPP_SESSION_KEY);
   clearAllIdempotencyKeys();
+  clearAiQuestion();
 }

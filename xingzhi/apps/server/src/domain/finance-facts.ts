@@ -20,6 +20,9 @@ type LedgerRow = {
   id: string; direction: 'inflow' | 'outflow'; amountMinor: number; occurredAt: Date;
   postedAt: Date | null; status: 'pending' | 'posted' | 'reversed';
   source: string; category: string | null; displayCategory: string | null; orderId: string | null;
+  summary: string | null; isRefund: boolean; linkedPeriodId: string | null;
+  linkedItemId: string | null; linkedItemTitle: string | null;
+  linkedCoveredMinor: number | null; linkedLinkId: string | null;
 };
 type ObligationRow = {
   id: string; obligationType: 'credit_bill' | 'loan_repayment' | 'installment';
@@ -127,9 +130,20 @@ export async function loadFinanceAccountFacts(db: FinanceDb, ownerId: string, ac
   const ledger = (await db.query<LedgerRow>(`SELECT entry.id,entry.direction,entry.amount_minor AS "amountMinor",
     entry.occurred_at AS "occurredAt",entry.posted_at AS "postedAt",entry.status,entry.source,
     entry.category,COALESCE(override.display_category,entry.category) AS "displayCategory",
-    entry.order_id AS "orderId" FROM finance_ledger_entries entry
+    entry.order_id AS "orderId",COALESCE(linked_order.item_name,entry.merchant_name,entry.note) AS summary,
+    budget_link.period_id AS "linkedPeriodId",budget_link.item_id AS "linkedItemId",
+    budget_link.id AS "linkedLinkId",budget_link.covered_minor AS "linkedCoveredMinor",
+    linked_item.title AS "linkedItemTitle",
+    (entry.direction='inflow' AND (entry.category='refund' OR EXISTS(
+      SELECT 1 FROM finance_money_events money WHERE money.applied_ledger_entry_id=entry.id
+        AND money.owner_id=entry.owner_id AND money.event_type='refund_verified'
+        AND money.verification_state='verified'))) AS "isRefund"
+    FROM finance_ledger_entries entry
     LEFT JOIN finance_ledger_category_overrides override
       ON override.entry_id=entry.id AND override.owner_id=entry.owner_id
+    LEFT JOIN orders linked_order ON linked_order.id=entry.order_id AND linked_order.owner_id=entry.owner_id
+    LEFT JOIN budget_ledger_links budget_link ON budget_link.entry_id=entry.id AND budget_link.active
+    LEFT JOIN budget_items linked_item ON linked_item.id=budget_link.item_id
     WHERE entry.account_id=$1 AND entry.owner_id=$2 ORDER BY entry.occurred_at DESC,entry.id DESC`, [accountId, ownerId])).rows;
   const obligationRows = (await db.query<ObligationRow>(`SELECT o.id,o.obligation_type AS "obligationType",
     o.liability_account_id AS "liabilityAccountId", liability.account_type AS "liabilityAccountType",
@@ -219,6 +233,10 @@ export async function loadFinanceAccountFacts(db: FinanceDb, ownerId: string, ac
       occurredAt: entry.occurredAt.toISOString(), postedAt: dateTime(entry.postedAt),
       status: entry.status, source: entry.source, category: entry.category,
       originalCategory: entry.category, displayCategory: entry.displayCategory, orderId: entry.orderId,
+      summary: entry.summary, isRefund: entry.isRefund,
+      linkedPlan: entry.linkedLinkId ? { linkId: entry.linkedLinkId,
+        periodId: entry.linkedPeriodId!, itemId: entry.linkedItemId!,
+        title: entry.linkedItemTitle!, coveredMinor: safeAmount(entry.linkedCoveredMinor)! } : null,
     })),
     obligations: account.accountType === 'debit'
       ? obligations : { items: obligationRows.filter((row) => row.liabilityAccountId === accountId).map((row) => ({

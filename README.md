@@ -113,13 +113,13 @@ pnpm --filter @xingzhi/server db:seed:consumer-scenario <unique-key> <YYYY-MM-DD
 
 ## 6. 数据库与运行边界
 
-当前本地工作区包含 `001` 至 `035` 的迁移文件；`034`、`035` 尚未提交到分支。`034` 增加登录失败限制和 AI 账目提问月份，`035` 增加普通流水与预算计划的关联/解除记录。文件存在不等于目标数据库已经执行；接手或换机器时要核对目标库 `schema_migrations`，不要手工改表、回写已执行 SQL 或把 Git 合并当作迁移完成。
+仓库包含 `001` 至 `035` 的迁移文件；`034` 增加登录失败限制和 AI 账目提问月份，`035` 增加普通流水与预算计划的关联/解除记录。文件存在不等于目标数据库已经执行；接手或换机器时要核对目标库 `schema_migrations`，不要手工改表、回写已执行 SQL 或把 Git 合并当作迁移完成。
 
 Simulation 是本地业务链证据，支付宝 Sandbox 是独立渠道环境，两者不能互相替代。付款、取消和退款都必须保留用户确认、权限、幂等、原业务号和恢复边界；渠道成功不等于银行账户已到账。
 
 ## 7. 当前阶段
 
-最新已提交基线为 `a7afecc`，其中 D1/D2 已交付；F1、F2 与 F3.1—F3.3 是本地未提交工作区的进展。F3 集中验收、真实模型回答、微信开发者工具、真机和正式录制仍待完成，Sandbox 与商户/审核证据另行验收。唯一详细状态见 [`04-development.md`](xingzhi/doc/04-development.md)，逐图功能对照见 [`01-product.md`](xingzhi/doc/01-product.md#7-ui-设计图功能清单与实现对照)。
+D1/D2 已交付，F1/F2 与 F3.1—F3.3 已有代码；F3 集中验收、真实模型回答、微信开发者工具、真机和正式录制仍待完成，Sandbox 与商户/审核证据另行验收。唯一详细状态见 [`04-development.md`](xingzhi/doc/04-development.md)，逐图功能对照见 [`01-product.md`](xingzhi/doc/01-product.md#7-ui-设计图功能清单与实现对照)。
 
 ## 8. 文档导航
 
@@ -130,5 +130,6 @@ Simulation 是本地业务链证据，支付宝 Sandbox 是独立渠道环境，
 | [`03-architecture.md`](xingzhi/doc/03-architecture.md) | 模块职责、数据实体、代码入口、接口导航和迁移边界 |
 | [`04-development.md`](xingzhi/doc/04-development.md) | 唯一的当前进度、验证来源、后续顺序和待确认项 |
 | [`05-acceptance-and-demo.md`](xingzhi/doc/05-acceptance-and-demo.md) | Simulation、微信、真机、Sandbox、跨角色核对和 Demo 记录 |
+| [开发接力指南](开发接力指南.md) | 同事接手的环境准备、协作边界及每轮开发后的交接摘要 |
 
 文档中的“已实现”“已有记录”“外部待验收”和“后续方向”含义不同；没有实际证据的能力必须继续保留为待验证。

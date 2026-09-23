@@ -53,6 +53,13 @@ test('A02 monthly budget keeps user estimates, versions, target audit and zero-n
       'SELECT financial_version FROM finance_accounts WHERE id=$1', [accountId],
     )).rows[0]!.financial_version);
     assert.equal(newFinancialVersion, financialVersion + 1);
+    await assert.rejects(() => applyBudgetItemChange(client, owner.id, {
+      periodId, itemId: null, expectedPeriodVersion: 1,
+      expectedFinancialVersion: financialVersion,
+      kind: 'planned_spend', title: '过期资金预览', categoryCode: null,
+      plannedOn: today, userEstimatedAmountMinor: 8000, priority: 'adjustable',
+      changeReason: '旧资金版本不可确认',
+    }), (error: unknown) => error instanceof AppError && error.code === 'VERSION_CONFLICT');
     const custom = await applyBudgetItemChange(client, owner.id, {
       periodId, itemId: null, expectedPeriodVersion: 1,
       kind: 'planned_spend', title: '自己安排的晚餐', categoryCode: null,
@@ -101,6 +108,10 @@ test('A02 monthly budget keeps user estimates, versions, target audit and zero-n
     assert.equal(Number(audit.previous_target_minor), 50000);
     assert.equal(Number(audit.new_target_minor), 60000);
     assert.equal(audit.confirmed_by, owner.id);
+    await assert.rejects(() => cancelBudgetItem(client, owner.id, {
+      periodId, itemId: custom.item.itemId, expectedPeriodVersion: 4,
+      expectedFinancialVersion: financialVersion, reason: '旧资金版本不可取消',
+    }), (error: unknown) => error instanceof AppError && error.code === 'VERSION_CONFLICT');
     const cancelled = await cancelBudgetItem(client, owner.id, {
       periodId, itemId: custom.item.itemId, expectedPeriodVersion: 4, reason: '用户取消这次晚餐',
     });

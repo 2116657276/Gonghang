@@ -109,6 +109,7 @@ export const budgetItemChangeInput = z.object({
   periodId: uuid,
   itemId: uuid.nullable(),
   expectedPeriodVersion: version,
+  expectedFinancialVersion: version.optional(),
   kind: z.enum(budgetItemKinds),
   title: z.string().trim().min(1).max(120),
   categoryCode: z.string().trim().min(1).max(80).nullable(),
@@ -136,6 +137,7 @@ export const budgetBasis = z.object({
   expectedIncomeMinor: nonnegativeMinor,
   pendingRefundMinor: nonnegativeMinor,
   minimumProjectedCashMinor: z.number().int().safe().nullable(),
+  minimumSavingsHeadroomMinor: z.number().int().safe().nullable(),
   minimumCashOn: date.nullable(),
   dataStatus: z.enum(['observed', 'incomplete', 'unknown']),
 }).strict();
@@ -436,6 +438,9 @@ export const budgetPeriodReview = z.object({
   targetChangeCount: z.number().int().nonnegative().safe(),
   confirmedPeriodOutflowMinor: nonnegativeMinor,
   confirmedPeriodInflowMinor: nonnegativeMinor,
+  linkedActualExpenseMinor: nonnegativeMinor,
+  remainingPlannedExpenseMinor: nonnegativeMinor,
+  unlinkedPostedExpenseMinor: nonnegativeMinor,
   classifiedUnexpectedExpenseMinor: nonnegativeMinor,
   confirmedOrderPaymentsMinor: nonnegativeMinor,
   confirmedRefundReceivedMinor: nonnegativeMinor,
@@ -449,6 +454,20 @@ export const budgetPeriodReview = z.object({
   periodEndTargetGapMinor: nonnegativeMinor.nullable(),
   reviewStatus: z.enum(['provisional', 'complete', 'unknown']),
   unknownIssues: z.array(z.string().trim().min(1).max(80)),
+}).strict();
+
+export const budgetLedgerLinkInput = z.object({
+  entryId: uuid,
+  itemId: uuid,
+  coveredMinor: positiveMinor,
+  expectedFinancialVersion: version,
+  expectedPeriodVersion: version,
+  confirmedByUser: z.literal(true),
+}).strict();
+
+export const budgetLedgerUnlinkInput = z.object({
+  expectedPeriodVersion: version,
+  confirmedByUser: z.literal(true),
 }).strict();
 
 export const consumerApiErrorCodes = [
@@ -500,6 +519,7 @@ export const budgetItemCancelInput = z.object({
   periodId: uuid,
   itemId: uuid,
   expectedPeriodVersion: version,
+  expectedFinancialVersion: version.optional(),
   reason: z.string().trim().min(2).max(200),
 }).strict();
 export type BudgetItemCancelInput = z.infer<typeof budgetItemCancelInput>;
