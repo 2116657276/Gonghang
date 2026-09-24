@@ -15,7 +15,9 @@ test('F3.3 links posted expense once, releases only remaining plan and preserves
     const snapshot = (await client.query<{ asOf: Date }>(
       'SELECT as_of AS "asOf" FROM finance_account_snapshots WHERE id=$1',
       [fixture.snapshotId])).rows[0]!;
-    const now = new Date(snapshot.asOf.getTime() + 3000);
+    // A pristine Demo fixture can be reused after it was seeded earlier today.
+    // Keep the review instant after both the posting and this test's new links.
+    const now = new Date(Math.max(Date.now() + 5000, snapshot.asOf.getTime() + 3000));
     const before = await forecastBudgetCashflow(client, fixture.ownerId, fixture.periodId, { now });
     const entryId = randomUUID();
     const postedAt = new Date(snapshot.asOf.getTime() + 1000);
@@ -71,6 +73,39 @@ test('F3.3 links posted expense once, releases only remaining plan and preserves
     const afterUnlink = await forecastBudgetCashflow(client, fixture.ownerId, fixture.periodId, { now });
     assert.equal(afterUnlink.forecast.minimumSavingsHeadroomMinor,
       before.forecast.minimumSavingsHeadroomMinor! - 4000);
+
+    const previousMonthEntryId = randomUUID();
+    const previousMonth = new Date(`${fixture.monthStart}T00:00:00Z`);
+    previousMonth.setUTCDate(0);
+    await client.query(`INSERT INTO finance_ledger_entries
+      (id,owner_id,account_id,source,direction,amount_minor,occurred_at,posted_at,
+        status,category,dedupe_key) VALUES($1,$2,$3,'demo','outflow',100,$4,$5,
+        'posted','food',$6)`, [previousMonthEntryId, fixture.ownerId, fixture.accountId,
+      previousMonth, postedAt, randomUUID()]);
+    const crossMonthBasis = await readBudgetLedgerLinks(client, fixture.ownerId, fixture.periodId);
+    await assert.rejects(linkBudgetLedgerEntry(client, fixture.ownerId, fixture.periodId, {
+      entryId: previousMonthEntryId, itemId: fixture.dinnerItemId, coveredMinor: 100,
+      expectedFinancialVersion: crossMonthBasis.financialVersion,
+      expectedPeriodVersion: crossMonthBasis.periodVersion, confirmedByUser: true,
+    }), (error: { code?: string }) => error.code === 'FINANCE_BASIS_UNKNOWN');
+
+    const otherAccountId = randomUUID();
+    const otherEntryId = randomUUID();
+    await client.query(`INSERT INTO finance_accounts
+      (id,owner_id,provider,account_type,provider_account_ref,masked_identifier,
+        display_name,source,authorized_at)
+      VALUES($1,$2,'demo','debit',$3,'****OTHER','其他测试账户','demo',$4)`,
+    [otherAccountId, fixture.ownerId, randomUUID(), now]);
+    await client.query(`INSERT INTO finance_ledger_entries
+      (id,owner_id,account_id,source,direction,amount_minor,occurred_at,posted_at,
+        status,category,dedupe_key) VALUES($1,$2,$3,'demo','outflow',100,$4,$4,
+        'posted','food',$5)`, [otherEntryId, fixture.ownerId, otherAccountId,
+      postedAt, randomUUID()]);
+    await assert.rejects(linkBudgetLedgerEntry(client, fixture.ownerId, fixture.periodId, {
+      entryId: otherEntryId, itemId: fixture.dinnerItemId, coveredMinor: 100,
+      expectedFinancialVersion: crossMonthBasis.financialVersion,
+      expectedPeriodVersion: crossMonthBasis.periodVersion, confirmedByUser: true,
+    }), (error: { code?: string }) => error.code === 'FINANCE_BASIS_UNKNOWN');
   } finally {
     await client.query('ROLLBACK');
     client.release();

@@ -12,6 +12,7 @@ import { commitPurchaseAssessment } from './purchase-commit.js';
 import { applyVerifiedMoneyEvent } from './verified-money-event.js';
 import { reviewBudgetPeriod } from './budget-period-review.js';
 import { forecastBudgetCashflow } from './budget-cashflow.js';
+import { loadFinanceAccountFacts } from './finance-facts.js';
 
 test('A06 distinguishes provider results from verified account postings and reviews late settlement', async () => {
   const client = await pool.connect();
@@ -271,7 +272,7 @@ test('A06 distinguishes provider results from verified account postings and revi
     await client.query(`INSERT INTO finance_ledger_entries
       (id,owner_id,account_id,source,source_ref,direction,amount_minor,
         occurred_at,posted_at,status,category,order_id,dedupe_key)
-      VALUES($1,$2,$3,'demo',$4,'inflow',1000,$5,$5,'posted','refund',$6,$7)`, [
+      VALUES($1,$2,$3,'demo',$4,'inflow',1000,$5,$5,'posted','food',$6,$7)`, [
       lateRefundId, fixture.ownerId, fixture.accountId, `late-refund-${lateRefundId}`,
       lateAt, committed.orderId, `a06-late-refund-${lateRefundId}`,
     ]);
@@ -288,6 +289,10 @@ test('A06 distinguishes provider results from verified account postings and revi
     assert.equal(closed.originalSavingsTargetMinor, 50000);
     assert.equal(closed.currentSavingsTargetMinor, 40000);
     assert.equal(closed.targetChangeCount, 1);
+    const factsWithPostedRefund = await loadFinanceAccountFacts(client,
+      fixture.ownerId, fixture.accountId, lateCheckedAt);
+    assert.equal(factsWithPostedRefund.ledger.find((row) => row.entryId === lateRefundId)?.isRefund, true,
+      '已入账 refund_posted 事实应识别原分类为 food 的退款流水');
 
     await client.query(`UPDATE orders SET payment_status='paid',reserved_minor=0
       WHERE id=$1`, [committed.orderId]);

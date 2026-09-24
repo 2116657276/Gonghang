@@ -117,7 +117,11 @@ Simulation 由本地 Worker/受控结果完成；Sandbox 付款可能返回官�
 | F1.2 逐日与单项影响（已实施） | server `domain/budget-cashflow.ts`、`cashflow-engine.ts`、`budget-periods.ts`，共享 consumer 契约 | 共享响应公开 daily、缓冲和事件引用；只读 `GET /api/budget-periods/:id/items/:itemId/impact` 复用同一引擎比较包含/移除未承诺项目，不在前端复制公式 |
 | F1.3 账目语义（已实施） | server `domain/finance-facts.ts`、`routes/finance-accounts.ts`、`routes/consumer-preferences.ts` | DTO 复用订单名、商户名或备注摘要；退款身份来自原始事实，展示分类不改退款统计；应用内偏好只过滤首页摘要。未新增迁移 |
 | F2 主页面 | miniapp `pages/home`、`plan`、`ledger`、`profile`、`impact`、`item`、`settings` | 复用 BottomSheet/FactRow/PlanItemCard 等组件；图表使用 Taro 支持的轻量呈现并配日期列表，不默认增加图表依赖 |
-| F3.1/F3.2 AI（代码已实现） | server `domain/consumer-planning-tools.ts`、`consumer-agent-runtime.ts`、`planning-drafts`；miniapp AI 与 draft 页面 | 具体问题先由用户核对再发送；账目工具仅按本人绑定账户和本次选中月份返回 posted 汇总。草稿字段显示用户输入与建议来源，单项影响走只读预算预览，不增加交易执行工具或直接保存正式计划 |
+| F3.1/F3.2 AI（代码已实现） | server `domain/consumer-planning-tools.ts`、`consumer-agent-runtime.ts`、`consumer-agent-response.ts`、`planning-drafts`；miniapp AI 与 draft 页面 | 具体问题先由用户核对再发送；账目工具仅按本人绑定账户和本次选中月份返回 posted 汇总。草稿字段显示用户输入与建议来源，单项影响走只读预算预览，不增加交易执行工具或直接保存正式计划 |
 | F3.3 实际关联（代码已实现） | `budget_ledger_links`、budget_periods/items、finance_ledger_entries、资金评估与周期复盘 | 迁移 `035` 保留关联及解除历史，一笔流水至多一条有效关联；写入锁定账户和周期并核对版本。服务端统一计算已覆盖与剩余计划，页面只展示结果 |
 
 F3.1/F3.2 沿用已有 `/api/ai/agent-runs`、规划草稿和预算预览接口，新增只读月度汇总 Agent 工具及迁移 `034` 的选中月份字段；登录失败限制也由该迁移持久化。F3.3 使用 `GET/POST /api/budget-periods/:id/ledger-links` 查询/确认关联，使用 `POST /api/budget-periods/:id/ledger-links/:linkId/unlinks` 解除；写入要求本人消费者会话、幂等键、明确确认和最新周期版本，关联还要求最新财务版本。金额只能覆盖同月、同账户 posted 非订单支出与未承诺的支出项目，不能超过流水金额或项目剩余；订单流水与已结算还款事实不参与。`finance-facts` 只返回本人有效关联摘要，预算预测只计算剩余计划，复盘同时列出已覆盖、未发生与未覆盖支出。解除不删原行，也不改变原流水或退款事实。旧计划兼容及已有订单/退款证据保留。
+
+F3 金额解释修复复用原运行输出字段：模型仍调用受控工具，`consumer-agent-response.ts` 根据成功工具事实组织最终答复，不把模型自由文本作为资金结论。草稿工具在原事务内按相同版本与时间比较加入前后，摘要随草稿返回模型，并持久化在运行输出中；不新增迁移、接口或前端契约。运行完成只表示执行结束，设备体验仍独立验收。
+
+2026-09-24 补充：预算读取工具通过可选 `focus` 选择解释主题，可调项目影响复用现有预测引擎逐项只读计算，未知原因由确定性输出层转换成用户可理解的说明。草稿页复用账户、周期和单项预览接口，支持未绑定草稿选周期及每次预览刷新版本，不新增迁移、草稿重绑定接口或自动写计划工具。流水和 AI 月度汇总统一以 `refund_posted` 判断关联退款。

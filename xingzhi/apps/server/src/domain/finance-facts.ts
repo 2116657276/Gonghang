@@ -136,7 +136,7 @@ export async function loadFinanceAccountFacts(db: FinanceDb, ownerId: string, ac
     linked_item.title AS "linkedItemTitle",
     (entry.direction='inflow' AND (entry.category='refund' OR EXISTS(
       SELECT 1 FROM finance_money_events money WHERE money.applied_ledger_entry_id=entry.id
-        AND money.owner_id=entry.owner_id AND money.event_type='refund_verified'
+        AND money.owner_id=entry.owner_id AND money.event_type='refund_posted'
         AND money.verification_state='verified'))) AS "isRefund"
     FROM finance_ledger_entries entry
     LEFT JOIN finance_ledger_category_overrides override

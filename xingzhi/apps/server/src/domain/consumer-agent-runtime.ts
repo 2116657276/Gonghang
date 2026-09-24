@@ -7,7 +7,7 @@ import { z } from 'zod';
 import type { AuthUser } from '../auth/session.js';
 import { query, transaction } from '../db/client.js';
 import { createPlanningDraft } from '../routes/planning-drafts.js';
-import { budgetPlanningDraftPort } from './budget-planning-draft-port.js';
+import { describeBudget, describeDraft, describeDraftImpact, displayMoney, groundedAgentResponse, type AdjustableImpact } from './consumer-agent-response.js';
 import { readBudgetPeriod } from './budget-periods.js';
 import { forecastBudgetCashflow } from './budget-cashflow.js';
 import { consumerPlanningAgentTools } from './consumer-planning-tools.js';
@@ -184,6 +184,7 @@ export async function executeConsumerAgentRun(runId: string, user: AuthUser,
   let pendingCall: string | undefined;
   let settlement = Promise.resolve();
   let modelFailed = false;
+  const responseSections = new Map<string, string>();
   let readBasis: { financialVersion: number; periodVersion: number } | null = null;
   const abort = new AbortController();
   const combined = AbortSignal.any([signal, abort.signal, AbortSignal.timeout(120_000)]);
@@ -207,7 +208,7 @@ export async function executeConsumerAgentRun(runId: string, user: AuthUser,
     read_budget_basis: async (raw) => {
       await ensureActive();
       if (++toolCalls > 20) throw new Error('工具次数达到上限。');
-      z.object({}).strict().parse(raw);
+      const { focus } = z.object({ focus: z.enum(['overview', 'lowest_balance', 'unknown', 'adjustable']).default('overview') }).strict().parse(raw);
       if (!periodId) throw new AppError(409, 'FINANCE_BASIS_UNKNOWN', '本次运行尚未绑定预算周期。');
       await query('UPDATE agent_runs SET tool_calls=$2 WHERE id=$1', [runId, toolCalls]);
       const result = await transaction(async (client) => {
@@ -220,12 +221,34 @@ export async function executeConsumerAgentRun(runId: string, user: AuthUser,
             rolling30: true, expectedFinancialVersion: period.basis.financialVersion,
             expectedPeriodVersion: period.basis.periodVersion,
           }) : null;
+        const adjustableImpacts: AdjustableImpact[] = [];
+        if (focus === 'adjustable' && period.forecast.status !== 'unknown') {
+          const candidates = (await client.query<{ id: string; title: string; plannedOn: string }>(`SELECT i.id,i.title,
+            to_char(i.planned_on,'YYYY-MM-DD') AS "plannedOn" FROM budget_items i
+            WHERE i.period_id=$1 AND i.owner_id=$2 AND i.kind='planned_spend'
+              AND i.status='planned' AND i.priority='adjustable'
+              AND NOT EXISTS(SELECT 1 FROM budget_ledger_links l WHERE l.item_id=i.id AND l.active)
+              AND NOT EXISTS(SELECT 1 FROM purchase_intents intent WHERE intent.budget_item_id=i.id
+                AND intent.owner_id=i.owner_id AND (intent.status IN ('confirmed','ordered')
+                  OR (intent.status='proposed' AND intent.expires_at>now())))
+            ORDER BY i.planned_on,i.id`, [periodId, user.id])).rows;
+          const options = { expectedFinancialVersion: period.basis.financialVersion,
+            expectedPeriodVersion: period.basis.periodVersion, now: new Date() };
+          const before = candidates.length ? await forecastBudgetCashflow(client, user.id, periodId, options) : null;
+          for (const item of candidates) {
+            const after = await forecastBudgetCashflow(client, user.id, periodId, { ...options, excludedItemId: item.id });
+            adjustableImpacts.push({ title: item.title, plannedOn: item.plannedOn,
+              before: before!.forecast.minimumSavingsHeadroomMinor, after: after.forecast.minimumSavingsHeadroomMinor });
+          }
+        }
         return { ...period, accountSource: account.source, accountStatus: account.status,
-          rolling30: rolling?.forecast ?? null };
+          rolling30: rolling?.forecast ?? null, adjustableImpacts };
       });
       readBasis = { financialVersion: result.basis.financialVersion,
         periodVersion: result.basis.periodVersion };
-      return result;
+      const summary = describeBudget(result, focus);
+      responseSections.set('budget', summary);
+      return { ...result, displaySummary: summary };
     },
     read_month_ledger_summary: async (raw) => {
       await ensureActive();
@@ -246,7 +269,7 @@ export async function executeConsumerAgentRun(runId: string, user: AuthUser,
             COALESCE(override.display_category,entry.category,'other') AS category,
             (entry.direction='inflow' AND (entry.category='refund' OR EXISTS(
               SELECT 1 FROM finance_money_events money WHERE money.applied_ledger_entry_id=entry.id
-                AND money.owner_id=entry.owner_id AND money.event_type='refund_verified'
+                AND money.owner_id=entry.owner_id AND money.event_type='refund_posted'
                 AND money.verification_state='verified'))) AS "isRefund",
             entry.amount_minor
           FROM finance_ledger_entries entry
@@ -259,20 +282,27 @@ export async function executeConsumerAgentRun(runId: string, user: AuthUser,
         ) SELECT direction,category,"isRefund",SUM(amount_minor)::text AS "amountMinor",
           COUNT(*)::text AS count FROM selected GROUP BY direction,category,"isRefund"
         ORDER BY direction,category,"isRefund"`, [user.id, account.accountId, month])).rows;
-      return { month, timezone: 'Asia/Shanghai', source: 'posted_account_ledger',
+      const summary = { month, timezone: 'Asia/Shanghai', source: 'posted_account_ledger',
         accountSource: account.accountSource,
         totalInflowMinor: rows.filter(row => row.direction === 'inflow').reduce((sum, row) => sum + Number(row.amountMinor), 0),
         totalOutflowMinor: rows.filter(row => row.direction === 'outflow').reduce((sum, row) => sum + Number(row.amountMinor), 0),
         refundInflowMinor: rows.filter(row => row.isRefund).reduce((sum, row) => sum + Number(row.amountMinor), 0),
         categories: rows.map(row => ({ direction: row.direction, category: row.category,
           isRefund: row.isRefund, amountMinor: Number(row.amountMinor), count: Number(row.count) })) };
+      const displaySummary = [
+        `${month} 已入账汇总（${account.accountSource === 'demo' ? '演示数据，非真实银行同步' : '账户记录'}）：`,
+        `总流入：${displayMoney(summary.totalInflowMinor)}；支出：${displayMoney(summary.totalOutflowMinor)}。`,
+        `其中退款流入：${displayMoney(summary.refundInflowMinor)}，已包含在总流入中，不重复累加。`,
+      ].join('\n');
+      responseSections.set('ledger', displaySummary);
+      return { ...summary, displaySummary };
     },
     search_offers: async (raw) => {
       await ensureActive();
       if (++toolCalls > 20) throw new Error('工具次数达到上限。');
       const args = offerSearchInput.parse(raw);
       await query('UPDATE agent_runs SET tool_calls=$2 WHERE id=$1', [runId, toolCalls]);
-      const result = await query(`SELECT id,code,name,description,category_code AS "categoryCode",
+      const result = await query<{ name: string; displayPriceMinor: number }>(`SELECT id,code,name,description,category_code AS "categoryCode",
           location_label AS "locationLabel",tags,purchase_mode AS "purchaseMode",
           price_minor AS "displayPriceMinor",currency,rule_label AS "ruleLabel"
         FROM catalog_items WHERE active AND currency='CNY'
@@ -280,6 +310,10 @@ export async function executeConsumerAgentRun(runId: string, user: AuthUser,
           AND (available_to IS NULL OR available_to>=$1::date)
           AND ($2::text IS NULL OR category_code=$2) ORDER BY code LIMIT 20`,
       [args.plannedOn, args.categoryCode ?? null]);
+      responseSections.set('offers', result.rows.length
+        ? ['平台登记的演示候选：', ...result.rows.map(item => `${item.name}：展示价格 ${displayMoney(Number(item.displayPriceMinor))}。`),
+          '尚未选定商品；展示价格不等于购买报价或购买授权。'].join('\n')
+        : '当前筛选下没有平台登记候选。');
       return { items: result.rows, source: 'bank_registered_demo_catalog' };
     },
     save_planning_draft: async (raw) => {
@@ -292,13 +326,26 @@ export async function executeConsumerAgentRun(runId: string, user: AuthUser,
         expectedPeriodVersion: readBasis?.periodVersion ?? null,
         items: constrainAgentDraftToMessage(payload.items, message) });
       await query('UPDATE agent_runs SET tool_calls=$2 WHERE id=$1', [runId, toolCalls]);
-      return transaction(async (client) => {
-        const draft = await createPlanningDraft(client, budgetPlanningDraftPort, user.id, input);
+      const result = await transaction(async (client) => {
+        let impact: string | null = null;
+        const draft = await createPlanningDraft(client, {
+          async assessPlanningDraft(client, ownerId, periodId, financialVersion, periodVersion, proposedItems) {
+            const options = { expectedFinancialVersion: financialVersion,
+              expectedPeriodVersion: periodVersion, now: new Date() };
+            const before = await forecastBudgetCashflow(client, ownerId, periodId, options);
+            const after = await forecastBudgetCashflow(client, ownerId, periodId, { ...options, proposedItems });
+            impact = describeDraftImpact(before.forecast, after.forecast);
+            return { status: after.forecast.status, shortfallMinor: after.forecast.shortfallMinor,
+              affectedDates: after.forecast.affectedDates, reasonCodes: after.forecast.reasonCodes };
+          },
+        }, user.id, input);
         await client.query(`INSERT INTO consumer_agent_artifacts(run_id,draft_id,owner_id)
           VALUES($1,$2,$3) ON CONFLICT (draft_id) DO NOTHING`,
         [runId, draft.data.draftId, user.id]);
-        return draft;
+        return { ...draft, displaySummary: describeDraft(draft.data, impact) };
       });
+      responseSections.set(`draft:${result.data.draftId}`, result.displaySummary);
+      return result;
     },
   });
   const shanghaiDate = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai',
@@ -306,8 +353,8 @@ export async function executeConsumerAgentRun(runId: string, user: AuthUser,
   const agent = new Agent({ initialState: { model, systemPrompt:
     `你是行止银行消费规划助手。当前上海日期为 ${shanghaiDate}；本次运行${periodId ? '已由服务端绑定预算周期' : '未绑定预算周期'}。只依据工具返回的本人预算和银行平台登记商品回答。
 用户明确给出的需求可保存为待确认草稿；缺失日期、金额或优先级必须保留为空，不得自行补写。解释账目时只能用本人绑定账户的${selectedLedgerMonth ?? '未选择'}月已入账汇总，不得索要或输出全部逐笔流水；工具返回的 accountSource 为 demo 时必须明说是演示数据，不能称为真实银行同步。
-你可以读取预算、搜索登记商品、保存非执行草稿。你不能选择商品、修改正式预算或储蓄目标、确认购买、创建订单、支付、取消或退款。
-金额字段以分计，展示为元时除以100。不要展示内部标识、密钥、模型推理过程或不必要的逐笔流水。`,
+你可以读取预算、搜索登记商品、保存非执行草稿。仅在用户明确要求查询商品时搜索目录；普通资金提问和保存草稿无需搜索商品。你不能选择商品、修改正式预算或储蓄目标、确认购买、创建订单、支付、取消或退款。
+金额字段以分计，展示为元时除以100。提问涉及最低日、未知原因或可调整项目时，必须选择 read_budget_basis 对应 focus；默认概览不能替代专项解释。优先引用工具的 displaySummary，禁止自行改写金额。allowed 只表示预算内，不表示余额不变；affectedDates 只表示缺口或未知日期。没有前后对比时不得断言无影响。草稿保存未修改预算，与正式加入后的预计影响必须区分。最终资金说明由服务端根据工具事实生成，你负责理解需求与调用适当工具；不要省略工具读取。不要展示内部标识、密钥、模型推理过程或不必要的逐笔流水。`,
     tools }, toolExecution: 'sequential',
     streamFn: async (_model, context, options) => {
       await settlement;
@@ -341,9 +388,12 @@ export async function executeConsumerAgentRun(runId: string, user: AuthUser,
     await ensureActive();
     if (modelFailed || pendingCall || agent.state.errorMessage) throw new Error('模型调用未完成。');
     const last = [...agent.state.messages].reverse().find((item) => item.role === 'assistant');
-    const output = last?.role === 'assistant'
+    const modelOutput = last?.role === 'assistant'
       ? last.content.filter((part) => part.type === 'text').map((part) => part.text).join('\n') : '';
-    if (!output) throw new Error('模型没有返回可显示回答。');
+    if (!modelOutput) throw new Error('模型没有返回可显示回答。');
+    // Draft replies focus on the saved demand and its impact, not an unfiltered catalog.
+    if ([...responseSections.keys()].some(key => key.startsWith('draft:'))) responseSections.delete('offers');
+    const output = groundedAgentResponse(responseSections.values());
     await transaction(async (client) => {
       await client.query(`UPDATE agent_runs SET state='COMPLETED',output=$2,finished_at=now()
         WHERE id=$1 AND state='RUNNING'`, [runId, output.slice(0, 16000)]);

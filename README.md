@@ -119,7 +119,7 @@ Simulation 是本地业务链证据，支付宝 Sandbox 是独立渠道环境，
 
 ## 7. 当前阶段
 
-D1/D2 已交付，F1/F2 与 F3.1—F3.3 已有代码；F3 集中验收、真实模型回答、微信开发者工具、真机和正式录制仍待完成，Sandbox 与商户/审核证据另行验收。唯一详细状态见 [`04-development.md`](xingzhi/doc/04-development.md)，逐图功能对照见 [`01-product.md`](xingzhi/doc/01-product.md#7-ui-设计图功能清单与实现对照)。
+D1/D2 已交付，F1/F2 与 F3.1—F3.3 已有代码。F3 集中验收发现的 AI 金额解释问题已修复，服务端定向回归和真实模型提问复验通过；后续评审发现的退款识别、草稿转入与版本问题也已修复并完成指定 H5 操作复验。下一步由接手者按[开发接力指南](开发接力指南.md)执行微信开发者工具完整财务主线。真机、正式录制、Sandbox 与商户/审核证据仍待各自验收。详细状态见 [`04-development.md`](xingzhi/doc/04-development.md)，逐图功能对照见 [`01-product.md`](xingzhi/doc/01-product.md#7-ui-设计图功能清单与实现对照)。
 
 ## 8. 文档导航
 

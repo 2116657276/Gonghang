@@ -44,8 +44,10 @@ export function consumerPlanningAgentTools(handlers: Record<ToolName, ToolHandle
     {
       name: 'read_budget_basis' as const,
       label: '读取预算依据',
-      description: '读取本人已授权周期的资金依据，只返回解释规划所需字段。',
-      parameters: Type.Object({}, { additionalProperties: false }),
+      description: '读取本人周期资金依据。按问题选择 focus：overview 概览、lowest_balance 最低日原因、unknown 未知原因、adjustable 可调整项目的独立影响。所有金额及解释使用 displaySummary。',
+      parameters: Type.Object({ focus: Type.Optional(Type.Union([
+        Type.Literal('overview'), Type.Literal('lowest_balance'), Type.Literal('unknown'), Type.Literal('adjustable'),
+      ])) }, { additionalProperties: false }),
     },
     {
       name: 'read_month_ledger_summary' as const,

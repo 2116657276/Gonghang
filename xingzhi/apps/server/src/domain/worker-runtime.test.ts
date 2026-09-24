@@ -365,7 +365,7 @@ test('F3.1 月度账目工具只向模型提供本人所选月汇总',async()=>{
         stream.push({type:'done',reason:tool?'toolUse':'stop',message:{role:'assistant',api:model.api,
           provider:model.provider,model:model.id,timestamp:Date.now(),stopReason:tool?'toolUse':'stop',
           content:tool?[{type:'toolCall',id:'month-summary',name:'read_month_ledger_summary',
-            arguments:{month}}]:[{type:'text',text:'已按该月已入账汇总说明。'}],
+            arguments:{month}}]:[{type:'text',text:'支出是 210 元，总流入是 3000 元。'}],
           usage:{input:10,cacheRead:0,cacheWrite:0,output:5,totalTokens:15,
             cost:{input:0,cacheRead:0,cacheWrite:0,output:0,total:0}}}});
         return stream;
@@ -374,7 +374,104 @@ test('F3.1 月度账目工具只向模型提供本人所选月汇总',async()=>{
     assert.equal(result.state,'COMPLETED');
     assert.equal(result.toolCalls,1);
     assert.equal(calls,2);
+    assert.match(result.output!, /总流入：300\.00 元；支出：21\.00 元/);
+    assert.doesNotMatch(result.output!, /支出是 210|3000 元/);
   }finally{await resetModelLedger();}
+});
+
+test('F3 运行链用确定性事实替换错误模型金额及草稿无影响断言', async () => {
+  const { createAssistantMessageEventStream } = await import('@earendil-works/pi-ai');
+  const { startConsumerAgentRun, executeConsumerAgentRun, readConsumerAgentRun } = await import('./consumer-agent-runtime.js');
+  const now = new Date();
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' }).format(now);
+  const ownerId = randomUUID(), accountId = randomUUID(), snapshotId = randomUUID(), periodId = randomUUID();
+  const end = new Date(`${today.slice(0, 7)}-01T00:00:00Z`);
+  end.setUTCMonth(end.getUTCMonth() + 1); end.setUTCDate(0);
+  await transaction(async client => {
+    await client.query(`INSERT INTO users(id,email,display_name,role,password_hash)
+      VALUES($1,$2,'F3 资金解释','consumer','disabled')`, [ownerId, `${ownerId}@test.local`]);
+    await client.query(`INSERT INTO finance_accounts
+      (id,owner_id,provider,account_type,provider_account_ref,masked_identifier,display_name,source,authorized_at)
+      VALUES($1,$2,'demo','debit',$3,'****F3','F3 测试','demo',$4)`, [accountId, ownerId, accountId, now]);
+    await client.query(`INSERT INTO finance_account_snapshots
+      (id,account_id,available_balance_minor,current_balance_minor,as_of,covered_through_at,fact_status,source)
+      VALUES($1,$2,70000,70000,$3,$3,'observed','demo')`, [snapshotId, accountId, now]);
+    await client.query(`INSERT INTO budget_periods
+      (id,owner_id,primary_account_id,baseline_snapshot_id,month_start,month_end,savings_target_minor,status,necessities_confirmed_at)
+      VALUES($1,$2,$3,$4,$5,$6,50000,'active',$7)`,
+    [periodId, ownerId, accountId, snapshotId, `${today.slice(0, 7)}-01`, end.toISOString().slice(0, 10), now]);
+  });
+  const user = { id: ownerId, email: '', displayName: '', role: 'consumer' as const };
+  const message = `记录 ${today} 火锅 100 元，可调整，只保存草稿`;
+  await resetModelLedger();
+  try {
+    const run = await startConsumerAgentRun(user, randomUUID(), { message, periodId });
+    let calls = 0;
+    await executeConsumerAgentRun(run.runId, user, message, periodId, new AbortController().signal, (model, context) => {
+      calls++;
+      if (calls === 3) assert.match(JSON.stringify(context.messages), /700\.00 元 → 600\.00 元/);
+      const stream = createAssistantMessageEventStream();
+      const tool = calls < 3;
+      stream.push({ type: 'done', reason: tool ? 'toolUse' : 'stop', message: {
+        role: 'assistant', api: model.api, provider: model.provider, model: model.id,
+        timestamp: Date.now(), stopReason: tool ? 'toolUse' : 'stop',
+        content: calls === 1 ? [{ type: 'toolCall', id: 'basis', name: 'read_budget_basis', arguments: {} }]
+          : calls === 2 ? [{ type: 'toolCall', id: 'draft', name: 'save_planning_draft', arguments: { items: [{
+            title: '火锅', plannedOn: today, userEstimatedAmountMinor: 10000, priority: 'adjustable',
+            requirements: [], catalogItemId: null, suggestion: null,
+          }] } }] : [{ type: 'text', text: '最低余额7000元，储蓄余量2000元。增加100元不影响最低现金。' }],
+        usage: { input: 10, cacheRead: 0, cacheWrite: 0, output: 5, totalTokens: 15,
+          cost: { input: 0, cacheRead: 0, cacheWrite: 0, output: 0, total: 0 } },
+      } });
+      return stream;
+    });
+    const result = await readConsumerAgentRun(user, run.runId);
+    assert.equal(result.state, 'COMPLETED');
+    assert.equal(result.artifacts.length, 1);
+    assert.match(result.output!, /预计最低余额：700\.00 元/);
+    assert.match(result.output!, /700\.00 元 → 600\.00 元（减少 100\.00 元）/);
+    assert.match(result.output!, /200\.00 元 → 100\.00 元/);
+    assert.doesNotMatch(result.output!, /7000元|2000元|不影响最低现金/);
+    assert.equal((await pool.query('SELECT count(*)::int AS n FROM budget_items WHERE period_id=$1', [periodId])).rows[0].n, 0);
+    assert.equal((await pool.query('SELECT count(*)::int AS n FROM orders WHERE owner_id=$1', [ownerId])).rows[0].n, 0);
+    async function askFocus(focus: 'unknown' | 'adjustable') {
+      // Each scenario is a separate user request, not a rate-limit stress test.
+      await pool.query("UPDATE agent_rate_limits SET tokens=2,updated_at=clock_timestamp() WHERE owner_id=$1", [ownerId]);
+      const requested = await startConsumerAgentRun(user, randomUUID(), { message: '核对规划依据', periodId });
+      let call = 0;
+      await executeConsumerAgentRun(requested.runId, user, '核对规划依据', periodId,
+        new AbortController().signal, model => {
+          call++;
+          const stream = createAssistantMessageEventStream();
+          const tool = call === 1;
+          stream.push({ type: 'done', reason: tool ? 'toolUse' : 'stop', message: {
+            role: 'assistant', api: model.api, provider: model.provider, model: model.id, timestamp: Date.now(),
+            stopReason: tool ? 'toolUse' : 'stop',
+            content: tool ? [{ type: 'toolCall', id: 'focus', name: 'read_budget_basis', arguments: { focus } }]
+              : [{ type: 'text', text: '按工具事实回答。' }],
+            usage: { input: 10, cacheRead: 0, cacheWrite: 0, output: 5, totalTokens: 15,
+              cost: { input: 0, cacheRead: 0, cacheWrite: 0, output: 0, total: 0 } },
+          } });
+          return stream;
+        });
+      const result = await readConsumerAgentRun(user, requested.runId);
+      assert.equal(result.state, 'COMPLETED');
+      return result.output!;
+    }
+    await pool.query('UPDATE budget_periods SET necessities_confirmed_at=NULL WHERE id=$1', [periodId]);
+    assert.match(await askFocus('unknown'), /本月必要支出尚未确认/);
+    await pool.query('UPDATE budget_periods SET necessities_confirmed_at=now() WHERE id=$1', [periodId]);
+    for (const [kind, title, amount, priority] of [
+      ['planned_spend', '可调出游', 10000, 'adjustable'],
+      ['essential_expense', '必要房租', 5000, 'required'],
+    ]) await pool.query(`INSERT INTO budget_items
+      (id,owner_id,period_id,account_id,kind,title,planned_on,user_estimated_amount_minor,priority)
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`, [randomUUID(), ownerId, periodId, accountId, kind, title, today, amount, priority]);
+    const adjustments = await askFocus('adjustable');
+    assert.match(adjustments, /可调出游：储蓄余量／缺口 50\.00 元 → 150\.00 元/);
+    assert.doesNotMatch(adjustments, /必要房租/);
+    assert.equal((await pool.query('SELECT count(*)::int AS n FROM budget_items WHERE period_id=$1', [periodId])).rows[0].n, 2);
+  } finally { await resetModelLedger(); }
 });
 
 const { processChannelJob } = await import('./channel-worker.js');
