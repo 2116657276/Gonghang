@@ -6,7 +6,7 @@ page {
   color: $text-primary;
   background: $background;
   font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif;
-  font-size: 26px;
+  font-size: 30px;
 }
 
 view, text, input, textarea, button, image { box-sizing: border-box; }
@@ -39,15 +39,15 @@ button::after { border: 0; }
   justify-content: center;
   padding: 0 32px;
   border-radius: 999px;
-  font-size: 26px;
+  font-size: 29px;
   font-weight: 600;
 }
 .primary-button { color: #fff; background: linear-gradient(135deg, #3A7A63 0%, #2B6652 100%); }
 .secondary-button { color: $brand-primary; background: $soft-surface; border: 1px solid $border; }
 .primary-button[disabled], .secondary-button[disabled] { opacity: .5; }
 
-.link-button { color: $brand-primary; font-size: 24px; font-weight: 600; }
-.notice { padding: 20px 24px; border-radius: 18px; font-size: 24px; line-height: 1.55; }
+.link-button { color: $brand-primary; font-size: 27px; font-weight: 600; }
+.notice { padding: 20px 24px; border-radius: 18px; font-size: 27px; line-height: 1.55; }
 .notice--info { color: $brand-deep; background: $surface-tint; border: 1px solid #C9DDD2; }
 .notice--warning { color: #7A5524; background: $warning-surface; border: 1px solid #EAD3B0; }
 .notice--error { color: $danger; background: $danger-surface; border: 1px solid #E7C5C1; }
@@ -55,8 +55,14 @@ button::after { border: 0; }
 /* Taro H5 会为未配置图标的文字型 tabBar 渲染空图片节点。 */
 .weui-tabbar__icon:not([src]) { display: none; }
 
+/* PageShell 提供真机计算后的变量；覆盖各详情页原先只依赖 env() 的定位。 */
+.back,
+.pending-button,
+.ai-history-button,
+.search-button { top: var(--app-action-top, calc(40px + env(safe-area-inset-top))) !important; }
+
 @media screen and (max-width: 360px) {
   .primary-button,
-  .secondary-button { min-height: 82px; padding-right: 24px; padding-left: 24px; font-size: 24px; }
-  .notice { padding: 18px 20px; font-size: 22px; }
+  .secondary-button { min-height: 82px; padding-right: 24px; padding-left: 24px; }
+  .notice { padding: 18px 20px; }
 }

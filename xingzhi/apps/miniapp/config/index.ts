@@ -75,6 +75,7 @@ export default defineConfig<'webpack5'>(async () => {
     alias: {
       '@': path.resolve(__dirname, '..', 'src'),
     },
+    plugins: [path.resolve(__dirname, 'preserve-native-components-plugin.ts')],
     framework: 'vue3',
     compiler: { type: 'webpack5', prebundle: { enable: false } },
     cache: { enable: true },

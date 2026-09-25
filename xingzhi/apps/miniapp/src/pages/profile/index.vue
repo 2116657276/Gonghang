@@ -15,11 +15,9 @@ import { goLogin } from '@/lib/api';
 import { errorMessage } from '@/lib/errors';
 import { clockTime, shortDate, yuan } from '@/lib/format';
 
-type GroupName = 'planning' | 'data' | 'app' | 'history' | 'account';
 const overview = useOverview();
 const { balanceVisible, toggleBalanceVisibility, resetBalanceVisibility } = useAmountVisibility();
 const session = useSession();
-const openGroup = ref<GroupName | null>('planning');
 const logoutOpen = ref(false);
 const revokeOpen = ref(false);
 const loggingOut = ref(false);
@@ -43,7 +41,6 @@ const defaultAccountCopy = computed(() => {
   return selected.account.accountId === overview.preferences.value?.defaultAccountId
     ? selected.account.displayName : `自动选用 ${selected.account.displayName}`;
 });
-function toggle(group: GroupName) { openGroup.value = openGroup.value === group ? null : group; }
 async function logout() {
   loggingOut.value = true; logoutError.value = '';
   try { await session.signOut(); resetBalanceVisibility(); goLogin(); }
@@ -59,31 +56,31 @@ function editReserveTarget() { if(!overview.primaryAccount.value){void Taro.navi
     <StatePanel v-if="overview.loading.value" title="正在读取账户设置" />
     <StatePanel v-else-if="overview.error.value" title="账户设置暂时不可用" :detail="overview.error.value" tone="error"><button class="secondary-button retry" @tap="overview.load">重新加载</button></StatePanel>
     <template v-else>
-      <SectionCard class="identity-card" @tap="Taro.navigateTo({url:'/pages/profile/info'})"><IpAvatar size="medium"/><view class="identity-card__copy"><text>{{ overview.user.value?.displayName }}</text><text>{{ overview.user.value?.email }}</text></view><StatusBadge label="查看资料" tone="success"/></SectionCard>
+      <SectionCard class="identity-card" @tap="Taro.navigateTo({url:'/subpackage/common/profile-info'})"><IpAvatar size="medium"/><view class="identity-card__copy"><text>{{ overview.user.value?.displayName }}</text><text>{{ overview.user.value?.email }}</text></view><StatusBadge label="查看资料" tone="success"/></SectionCard>
       <SectionCard class="account-card" @tap="openAccount"><view class="row-between"><view><text class="account-card__title">我的主账户</text><text class="account-card__name">{{ displayAccount?.account.displayName??'尚未连接账户' }} {{ displayAccount?.account.maskedIdentifier??'' }}</text></view><StatusBadge :label="accountStatus" :tone="overview.primaryAccount.value?'success':'neutral'"/></view><view class="account-card__balance"><text class="account-card__amount amount">{{ !overview.primaryAccount.value?'—':balanceVisible?yuan(overview.primaryAccount.value.cashBasis.confirmedCashMinor):'••••' }}</text><button v-if="overview.primaryAccount.value" class="visibility-button" :aria-label="balanceVisible?'隐藏主账户金额':'显示主账户金额'" @tap.stop="toggleBalanceVisibility">{{balanceVisible?'隐藏':'显示'}}</button></view><view class="account-card__foot"><text>{{ accountUpdated }}</text><text>{{displayAccount?'查看依据':'选择账户'}} ›</text></view></SectionCard>
 
       <view class="setting-list">
-        <SettingGroup title="规划设置" icon="规" :open="openGroup==='planning'" @toggle="toggle('planning')">
+        <SettingGroup title="规划设置" icon="规" :open="true">
           <button class="setting-row" @tap="editReserveTarget"><text>保留目标</text><view><text>{{ yuan(overview.currentPeriod.value?.basis.savingsTargetMinor) }}</text><text>›</text></view></button>
           <button class="setting-row" @tap="Taro.navigateTo({url:'/pages/account/select'})"><text>默认规划账户</text><view><text>{{ defaultAccountCopy }}</text><text>›</text></view></button>
           <button class="setting-row" @tap="openAccount"><text>数据更新时间</text><view><text>{{ accountUpdated }}</text><text>›</text></view></button>
         </SettingGroup>
-        <SettingGroup title="数据与授权" icon="权" :open="openGroup==='data'" @toggle="toggle('data')">
+        <SettingGroup title="数据与授权" icon="权" :open="true">
           <button class="setting-row" @tap="Taro.navigateTo({url:'/pages/settings/privacy'})"><text>授权范围</text><view><text>本人账户</text><text>›</text></view></button>
           <button class="setting-row" @tap="Taro.navigateTo({url:'/pages/settings/data-usage'})"><text>数据说明</text><view><text>查看</text><text>›</text></view></button>
           <button class="setting-row" @tap="Taro.navigateTo({url:'/pages/settings/privacy'})"><text>隐私与安全</text><view><text>查看</text><text>›</text></view></button>
         </SettingGroup>
-        <SettingGroup title="应用设置" icon="设" :open="openGroup==='app'" @toggle="toggle('app')">
+        <SettingGroup title="应用设置" icon="设" :open="true">
           <button class="setting-row" @tap="Taro.navigateTo({url:'/pages/settings/notifications'})"><text>应用内提醒</text><view><text>首页提示偏好</text><text>›</text></view></button>
           <button class="setting-row" @tap="Taro.navigateTo({url:'/pages/settings/about?section=environment'})"><text>演示环境</text><view><text>查看运行状态</text><text>›</text></view></button>
           <button class="setting-row" @tap="Taro.navigateTo({url:'/pages/settings/about'})"><text>关于行止</text><view><text>查看</text><text>›</text></view></button>
         </SettingGroup>
-        <SettingGroup title="历史与复盘" icon="史" :open="openGroup==='history'" @toggle="toggle('history')">
+        <SettingGroup title="历史与复盘" icon="史" :open="true">
           <button class="setting-row" @tap="Taro.navigateTo({url:'/pages/orders/index'})"><text>订单与确认</text><view><text>恢复状态</text><text>›</text></view></button>
-          <button class="setting-row" @tap="Taro.navigateTo({url:'/pages/plan/history'})"><text>历史计划</text><view><text>{{ overview.periods.value.length }} 个周期</text><text>›</text></view></button>
+          <button class="setting-row" @tap="Taro.navigateTo({url:'/subpackage/common/plan-history'})"><text>历史计划</text><view><text>{{ overview.periods.value.length }} 个周期</text><text>›</text></view></button>
           <button class="setting-row" @tap="Taro.navigateTo({url:'/pages/review/list'})"><text>月度复盘</text><view><text>{{overview.periods.value.length?'查看':'暂无周期'}}</text><text>›</text></view></button>
         </SettingGroup>
-        <SettingGroup title="账户管理" icon="户" :open="openGroup==='account'" @toggle="toggle('account')">
+        <SettingGroup title="账户管理" icon="户" :open="true">
           <button v-if="overview.primaryAccount.value" class="setting-row setting-row--danger" @tap="revokeOpen=true"><text>撤回账户授权</text><view><text>查看影响</text><text>›</text></view></button>
           <button v-else class="setting-row" @tap="Taro.navigateTo({url:'/pages/account/select'})"><text>{{revokedAccount?'查看已撤回账户':'选择规划账户'}}</text><view><text>查看状态</text><text>›</text></view></button>
         </SettingGroup>

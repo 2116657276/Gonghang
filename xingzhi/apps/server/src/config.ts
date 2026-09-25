@@ -19,6 +19,7 @@ const paymentMode: 'simulation' | 'sandbox' = paymentModeValue;
 export const config = {
   databaseUrl: required('DATABASE_URL', 'postgresql://localhost:5432/xingzhi_dev'),
   port: Number(process.env.PORT ?? 8787),
+  host: required('HOST', '127.0.0.1'),
   webOrigin: required('WEB_ORIGIN', 'http://localhost:5173'),
   sessionCookieSecure: process.env.SESSION_COOKIE_SECURE === 'true',
   paymentMode,

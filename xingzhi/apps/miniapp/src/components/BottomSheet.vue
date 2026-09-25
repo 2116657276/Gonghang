@@ -6,11 +6,13 @@ withDefaults(defineProps<{
   primaryText?: string;
   secondaryText?: string;
   aboveTabBar?: boolean;
+  expanded?: boolean;
 }>(), {
   description: '',
   primaryText: '',
   secondaryText: '关闭',
   aboveTabBar: false,
+  expanded: false,
 });
 
 const emit = defineEmits<{
@@ -31,7 +33,7 @@ function secondary() {
 
 <template>
   <view v-if="modelValue" class="sheet-layer" @tap="close">
-    <view class="sheet" :class="{'sheet--above-tabbar':aboveTabBar}" @tap.stop>
+    <view class="sheet" :class="{'sheet--above-tabbar':aboveTabBar,'sheet--expanded':expanded}" @tap.stop>
       <view class="sheet__handle" />
       <view class="sheet__heading">
         <view>
@@ -58,8 +60,9 @@ function secondary() {
 .sheet--above-tabbar{padding-bottom:calc(60PX + env(safe-area-inset-bottom))}
 .sheet__handle{width:72px;height:8px;margin:0 auto 22px;background:#CAD4CE;border-radius:999px}
 .sheet__heading{display:flex;align-items:flex-start;justify-content:space-between;gap:22px}.sheet__heading>view{flex:1;min-width:0}
-.sheet__title,.sheet__description{display:block}.sheet__title{color:$brand-deep;font-size:32px;font-weight:720}.sheet__description{margin-top:8px;color:$text-secondary;font-size:22px;line-height:1.55}
+.sheet__title,.sheet__description{display:block}.sheet__title{color:$brand-deep;font-size:34px;font-weight:720}.sheet__description{margin-top:8px;color:$text-secondary;font-size:26px;line-height:1.55}
 .sheet__close{flex:0 0 54px;width:54px;height:54px;color:$text-secondary;background:$soft-surface;border-radius:50%;font-size:38px;line-height:50px}
 .sheet__body{max-height:43vh;margin-top:26px}.sheet__actions{display:flex;gap:14px;margin-top:26px}.sheet__actions .secondary-button{flex:1}.sheet__actions .primary-button{flex:1.35}
-@media screen and (max-width:360px){.sheet{padding:12px 20px calc(20px + env(safe-area-inset-bottom));border-radius:24px 24px 0 0}.sheet--above-tabbar{padding-bottom:calc(60PX + env(safe-area-inset-bottom))}.sheet__handle{margin-bottom:18px}.sheet__title{font-size:28px}.sheet__description{font-size:20px}.sheet__body{max-height:48vh;margin-top:20px}.sheet__actions{display:grid;gap:10px;margin-top:20px}.sheet__actions button{width:100%}}
+.sheet--expanded{max-height:88vh}.sheet--expanded .sheet__body{max-height:62vh}
+@media screen and (max-width:360px){.sheet{padding:12px 20px calc(20px + env(safe-area-inset-bottom));border-radius:24px 24px 0 0}.sheet--above-tabbar{padding-bottom:calc(60PX + env(safe-area-inset-bottom))}.sheet__handle{margin-bottom:18px}.sheet__body{max-height:48vh;margin-top:20px}.sheet__actions{display:grid;gap:10px;margin-top:20px}.sheet__actions button{width:100%}}
 </style>
