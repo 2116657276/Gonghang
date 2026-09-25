@@ -60,6 +60,16 @@ Windows PowerShell：
 .\start-xingzhi.ps1 -Restart -NoBrowser
 ```
 
+Windows 真机联调时，让电脑连接手机热点后使用：
+
+```powershell
+.\start-xingzhi.ps1 -Restart -Mobile -NoBrowser
+```
+
+`-Mobile` 会让后端临时监听局域网，并将电脑当前热点 IPv4 编入微信产物；终端会打印手机应访问的 API 地址。该模式只用于可信的本地热点，结束联调后按普通命令重启即可恢复仅本机监听。
+
+启动脚本会以压缩模式持续生成微信产物，并将登录页和五个主标签保留在主包、其余页面放入分包，避免真机调试的 2 MiB 主包限制。更改页面后请等待终端中的 `[weapp] Compiled successfully`，再回到开发者工具点击“编译/真机调试”。
+
 第一次准备全新的隔离演示数据库时，才使用脚本的 `--seed`/`-Seed` 选项。日常启动不要重复 Seed 正在使用的数据库；已有账户、预算和订单受保护时，不要通过删除业务数据绕过保护。
 
 ## 4. 地址与微信开发者工具
@@ -73,7 +83,7 @@ Windows PowerShell：
 | 微信项目导入目录 | `xingzhi/apps/miniapp` |
 | 微信小程序产物根目录 | `xingzhi/apps/miniapp/dist/weapp` |
 
-在微信开发者工具中导入 `xingzhi/apps/miniapp`，不要直接导入 `dist/weapp`。本机开发者工具可以使用 `http://127.0.0.1:8877`；真机不能使用电脑的 `127.0.0.1`，必须使用手机可访问的 HTTPS API 和已配置的微信合法域名。
+在微信开发者工具中导入 `xingzhi/apps/miniapp`，不要直接导入 `dist/weapp`。本机开发者工具可以使用 `http://127.0.0.1:8877`；Windows 热点真机调试可使用上面的 `-Mobile`。正式预览和发布仍必须使用手机可访问的 HTTPS API 和已配置的微信合法域名。
 
 真机编译前可在启动时保留外部 API 地址：
 
@@ -94,7 +104,7 @@ pnpm typecheck
 # 服务端定向回归
 pnpm test:targeted
 
-# 消费者 H5 / 微信小程序 / 全仓构建
+# 消费者 H5 / 微信小程序 / 其余工作区构建
 pnpm build:miniapp:h5
 pnpm build:miniapp:weapp
 pnpm build
@@ -102,6 +112,8 @@ pnpm build
 # 按文件名顺序应用尚未登记的数据库迁移
 pnpm db:migrate
 ```
+
+`pnpm build` 不会自动执行小程序的 H5/微信构建；交付前需要按上面的顺序分别运行三个构建命令。
 
 创建新的消费者隔离场景时使用唯一场景键和实际上海日期：
 
@@ -119,7 +131,7 @@ Simulation 是本地业务链证据，支付宝 Sandbox 是独立渠道环境，
 
 ## 7. 当前阶段
 
-D1/D2 已交付，F1/F2 与 F3.1—F3.3 已有代码。F3 集中验收发现的 AI 金额解释问题已修复，服务端定向回归和真实模型提问复验通过；后续评审发现的退款识别、草稿转入与版本问题也已修复并完成指定 H5 操作复验。下一步由接手者按[开发接力指南](开发接力指南.md)执行微信开发者工具完整财务主线。真机、正式录制、Sandbox 与商户/审核证据仍待各自验收。详细状态见 [`04-development.md`](xingzhi/doc/04-development.md)，逐图功能对照见 [`01-product.md`](xingzhi/doc/01-product.md#7-ui-设计图功能清单与实现对照)。
+D1/D2 已交付，F1/F2 与 F3.1—F3.3 已有代码。F3 集中验收发现的 AI 金额解释问题已修复，服务端定向回归和真实模型提问复验通过；后续评审发现的退款识别、草稿转入与版本问题也已修复并完成指定 H5 操作复验。2026-09-25 合并后审查的类型检查、服务端 86/86 定向回归、H5/微信小程序/管理网页构建通过；这些结果不替代应用运行和设备验收。下一步先收尾 Windows 启动脚本并在微信开发者工具核对包体和启动，再依次执行微信完整财务主线、真机最小主线和财务 Demo。Sandbox 与商户/审核证据仍是独立交易专项。详细状态与唯一顺序见 [`04-development.md`](xingzhi/doc/04-development.md)，操作见[开发接力指南](开发接力指南.md)。
 
 ## 8. 文档导航
 

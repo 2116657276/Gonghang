@@ -270,4 +270,4 @@ exec "$CONCURRENTLY" \
   "pnpm --dir \"$SERVER_DIR\" worker" \
   "pnpm --dir \"$MINIAPP_DIR\" dev:h5" \
   "pnpm --dir \"$ADMIN_WEB_DIR\" dev" \
-  "pnpm --dir \"$MINIAPP_DIR\" dev:weapp"
+  "NODE_ENV=production pnpm --dir \"$MINIAPP_DIR\" dev:weapp"

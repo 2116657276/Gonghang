@@ -2,7 +2,8 @@
     [switch]$Seed,
     [switch]$BackendOnly,
     [switch]$NoBrowser,
-    [switch]$Restart
+    [switch]$Restart,
+    [switch]$Mobile
 )
 
 $ErrorActionPreference = "Stop"
@@ -19,9 +20,10 @@ function Stop-WithError([string]$Message) {
 }
 
 function Test-TcpPort([int]$Port, [string]$HostName = "127.0.0.1") {
+    $connectHost = if ($HostName -eq "localhost") { "127.0.0.1" } else { $HostName }
     $client = [System.Net.Sockets.TcpClient]::new()
     try {
-        $connection = $client.BeginConnect($HostName, $Port, $null, $null)
+        $connection = $client.BeginConnect($connectHost, $Port, $null, $null)
         if (-not $connection.AsyncWaitHandle.WaitOne(500)) {
             return $false
         }
@@ -34,6 +36,18 @@ function Test-TcpPort([int]$Port, [string]$HostName = "127.0.0.1") {
     finally {
         $client.Dispose()
     }
+}
+
+function Get-LanIPv4 {
+    $routeLines = route print -4 | Select-String '^\s*0\.0\.0\.0\s+0\.0\.0\.0\s+(\S+)\s+(\S+)\s+(\d+)\s*$'
+    $candidates = foreach ($line in $routeLines) {
+        $ip = $line.Matches[0].Groups[2].Value
+        $metric = [int]$line.Matches[0].Groups[3].Value
+        if ($ip -notmatch '^(127\.|169\.254\.|198\.18\.)') {
+            [pscustomobject]@{ IP = $ip; Metric = $metric }
+        }
+    }
+    return ($candidates | Sort-Object Metric | Select-Object -First 1).IP
 }
 
 function Test-HttpReady([string]$Url) {
@@ -58,7 +72,7 @@ function Stop-XingzhiDevProcesses([string]$RootPath) {
     $targets = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
         $_.Name -eq "node.exe" -and
         $_.CommandLine -match $escapedRoot -and
-        $_.CommandLine -match '(concurrently|tsx.+watch|taro.+--watch|pnpm.+(--filter|--dir).+(dev|worker|dev:h5))'
+        $_.CommandLine -match '(concurrently|tsx.+watch|taro.+--watch|vite[\\/]+bin[\\/]vite\.js|pnpm.+(--filter|--dir).+(dev|worker|dev:h5))'
     }
     foreach ($target in $targets) {
         Stop-Process -Id $target.ProcessId -Force -ErrorAction SilentlyContinue
@@ -104,6 +118,17 @@ if (-not (Select-String -Path $envFile -Pattern '^PORT=8877\s*$' -Quiet)) {
 }
 if (-not (Select-String -Path $envFile -Pattern '^WEB_ORIGIN=http://localhost:5173\s*$' -Quiet)) {
     Stop-WithError "请在 xingzhi\.env 中设置 WEB_ORIGIN=http://localhost:5173。"
+}
+
+if ($Mobile) {
+    $lanIPv4 = Get-LanIPv4
+    if (-not $lanIPv4) {
+        Stop-WithError "没有检测到可供手机访问的局域网 IPv4 地址，请确认电脑已连接手机热点。"
+    }
+    $env:HOST = "0.0.0.0"
+    $env:TARO_APP_API_BASE = "http://$($lanIPv4):8877"
+    Write-Host "真机联调地址: $($env:TARO_APP_API_BASE)" -ForegroundColor Green
+    Write-Host "如果手机浏览器无法打开该地址，请允许 Windows 防火墙中的 Node.js 局域网访问。" -ForegroundColor Yellow
 }
 
 $databaseUrlLine = Select-String -Path $envFile -Pattern '^DATABASE_URL=(.+)$' | Select-Object -First 1
@@ -228,8 +253,12 @@ for ($attempt = 0; $attempt -lt 60; $attempt++) {
 
 $serverCommand = "pnpm --dir `"$serverDir`" dev"
 $workerCommand = "pnpm --dir `"$serverDir`" worker"
-$miniappCommand = "pnpm --dir `"$miniappDir`" dev:h5"
-$weappCommand = "pnpm --dir `"$miniappDir`" dev:weapp"
+$miniappCommand = "set TARO_APP_API_BASE=&& pnpm --dir `"$miniappDir`" dev:h5"
+# concurrently starts each item through a new cmd.exe process. Put the mobile
+# API value in that exact command instead of relying on inherited PowerShell
+# environment state; otherwise a later incremental build can silently fall
+# back to 127.0.0.1, which works in DevTools but can never work on a phone.
+$weappCommand = "set TARO_APP_API_BASE=$weappApiBase&& set NODE_ENV=production&& pnpm --dir `"$miniappDir`" dev:weapp"
 $adminWebCommand = "pnpm --dir `"$adminWebDir`" dev"
 $env:TARO_APP_API_BASE = $weappApiBase
 
