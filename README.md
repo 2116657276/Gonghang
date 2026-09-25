@@ -72,8 +72,9 @@ Windows PowerShell：
 | API 健康检查 | `http://localhost:8877/api/health` |
 | 微信项目导入目录 | `xingzhi/apps/miniapp` |
 | 微信小程序产物根目录 | `xingzhi/apps/miniapp/dist/weapp` |
+| 微信本机项目配置 | `xingzhi/apps/miniapp/project.config.json`（含 AppID，不纳入 Git） |
 
-在微信开发者工具中导入 `xingzhi/apps/miniapp`，不要直接导入 `dist/weapp`。本机开发者工具可以使用 `http://127.0.0.1:8877`；真机不能使用电脑的 `127.0.0.1`，必须使用手机可访问的 HTTPS API 和已配置的微信合法域名。
+在微信开发者工具中导入 `xingzhi/apps/miniapp`，不要直接导入 `dist/weapp`。导入前需通过负责人提供的私下渠道取得本机 `project.config.json`，并确认其中配置了有权使用的 AppID 和 `miniprogramRoot: dist/weapp/`；不要把该文件提交到 Git。本机开发者工具可以使用 `http://127.0.0.1:8877`；真机不能使用电脑的 `127.0.0.1`，必须使用手机可访问的 HTTPS API 和已配置的微信合法域名。
 
 真机编译前可在启动时保留外部 API 地址：
 
