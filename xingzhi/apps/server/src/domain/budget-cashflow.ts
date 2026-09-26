@@ -251,9 +251,8 @@ export async function forecastBudgetCashflow(client: PoolClient, ownerId: string
       || !items.some((item) => item.id === options.excludedItemId)) {
       throw new AppError(409, 'ITEM_NOT_ORDERABLE', '只能预览本人尚未承诺的计划项目。');
     }
-    if (safeMinor(items.find((item) => item.id === options.excludedItemId)?.coveredMinor ?? 0) > 0) {
-      throw new AppError(409, 'ITEM_NOT_ORDERABLE', '已有实际支出关联，请先解除后再取消计划。');
-    }
+    // Read-only comparison removes only the remaining planned expense. Posted cash
+    // stays in the opening balance; write paths still reject edits to linked items.
   }
   const overridden = new Map<string, PlannedRow>();
   if (options.optionChanges?.length) {
@@ -355,12 +354,21 @@ export async function previewBudgetItemImpact(client: PoolClient, ownerId: strin
   periodId: string, itemId: string) {
   const now = new Date();
   const withItem = await forecastBudgetCashflow(client, ownerId, periodId, { now });
+  const coverage = (await client.query<{ estimated: string; covered: string }>(`SELECT
+    i.user_estimated_amount_minor AS estimated,
+    COALESCE((SELECT SUM(l.covered_minor) FROM budget_ledger_links l
+      WHERE l.item_id=i.id AND l.active),0)::text AS covered
+    FROM budget_items i WHERE i.id=$1 AND i.owner_id=$2 AND i.period_id=$3`,
+  [itemId, ownerId, periodId])).rows[0];
+  if (!coverage) throw new AppError(404, 'RESOURCE_FORBIDDEN', '未找到本人预算项目。');
   const withoutItem = await forecastBudgetCashflow(client, ownerId, periodId, {
     excludedItemId: itemId, expectedFinancialVersion: withItem.financialVersion,
     expectedPeriodVersion: withItem.periodVersion, now,
   });
   return {
     periodId, itemId,
+    estimatedMinor: safeMinor(coverage.estimated), coveredMinor: safeMinor(coverage.covered),
+    remainingMinor: Math.max(0, safeMinor(coverage.estimated) - safeMinor(coverage.covered)),
     financialVersion: withItem.financialVersion,
     periodVersion: withItem.periodVersion,
     withItem: withItem.forecast,

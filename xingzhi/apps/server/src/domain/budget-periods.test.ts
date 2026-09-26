@@ -1,12 +1,16 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { test } from 'node:test';
-import { pool, closePool } from '../db/client.js';
+import { after, test } from 'node:test';
+import { createIsolatedTestDatabase } from '../db/isolated-test-database.js';
 import { AppError } from './errors.js';
-import {
+
+const database = await createIsolatedTestDatabase();
+const { pool } = database;
+after(() => database.close());
+const {
   createBudgetPeriod, applyBudgetItemChange, cancelBudgetItem,
   activateBudgetPeriod, changeSavingsTarget, readBudgetPeriod,
-} from './budget-periods.js';
+} = await import('./budget-periods.js');
 
 test('A02 monthly budget keeps user estimates, versions, target audit and zero-necessities confirmation', async () => {
   const client = await pool.connect();
@@ -125,6 +129,5 @@ test('A02 monthly budget keeps user estimates, versions, target audit and zero-n
   } finally {
     await client.query('ROLLBACK');
     client.release();
-    await closePool();
   }
 });

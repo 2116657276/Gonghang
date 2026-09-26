@@ -54,6 +54,8 @@ export async function createBudgetAdjustment(
   const candidates = (await client.query<{ id: string; title: string }>(`SELECT i.id,i.title
     FROM budget_items i WHERE i.owner_id=$1 AND i.period_id=$2
       AND i.kind='planned_spend' AND i.priority='adjustable' AND i.status='planned'
+      AND i.settled_ledger_entry_id IS NULL
+      AND NOT EXISTS (SELECT 1 FROM budget_ledger_links l WHERE l.item_id=i.id AND l.active)
       AND NOT EXISTS (SELECT 1 FROM purchase_intents intent
         WHERE intent.owner_id=i.owner_id AND intent.budget_item_id=i.id
           AND intent.status IN ('proposed','confirmed','ordered'))
@@ -138,6 +140,16 @@ export async function confirmBudgetAdjustment(
   adjustmentId: string,
   input: BudgetAdjustmentConfirmInput,
 ) {
+  // Match purchase confirmation's account -> periods -> business object lock order.
+  const scope = (await client.query<{ accountId: string; periodId: string }>(`SELECT
+    p.primary_account_id AS "accountId",p.id AS "periodId"
+    FROM budget_adjustment_proposals a JOIN budget_periods p ON p.id=a.period_id
+    WHERE a.id=$1 AND a.owner_id=$2 AND p.owner_id=$2`, [adjustmentId, ownerId])).rows[0];
+  if (!scope) throw new AppError(404, 'RESOURCE_FORBIDDEN', '未找到本人的调整方案。');
+  await client.query('SELECT id FROM finance_accounts WHERE id=$1 AND owner_id=$2 FOR UPDATE',
+    [scope.accountId, ownerId]);
+  await client.query(`SELECT id FROM budget_periods WHERE primary_account_id=$1 AND owner_id=$2
+    AND (status='active' OR id=$3) ORDER BY id FOR UPDATE`, [scope.accountId, ownerId, scope.periodId]);
   const row = (await client.query<{
     periodId: string;
     financialVersion: string;
@@ -181,6 +193,7 @@ export async function confirmBudgetAdjustment(
       periodId: row.periodId,
       itemId: change.budgetItemId,
       expectedPeriodVersion: periodVersion,
+      expectedFinancialVersion: input.expectedFinancialVersion,
       reason: `调整方案：${row.proposedChanges.emergency.reason}`.slice(0, 200),
     });
     periodVersion = cancelled.basis.periodVersion;
@@ -191,6 +204,7 @@ export async function confirmBudgetAdjustment(
     periodId: row.periodId,
     itemId: null,
     expectedPeriodVersion: periodVersion,
+    expectedFinancialVersion: input.expectedFinancialVersion,
     kind: 'essential_expense',
     title: `意外支出：${emergency.reason}`.slice(0, 120),
     categoryCode: 'unexpected',

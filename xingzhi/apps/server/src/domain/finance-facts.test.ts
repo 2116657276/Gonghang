@@ -1,13 +1,17 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { test } from 'node:test';
+import { after, test } from 'node:test';
 import Fastify from 'fastify';
 import type { PoolClient } from 'pg';
 import { config } from '../config.js';
-import { pool, closePool } from '../db/client.js';
-import { seedConsumerFinanceDemo } from '../db/consumer-finance-demo.js';
-import { registerFinanceAccountApi } from '../routes/finance-accounts.js';
-import { loadFinanceAccountFacts, readExecutionCashBasis } from './finance-facts.js';
+import { createIsolatedTestDatabase } from '../db/isolated-test-database.js';
+
+const database = await createIsolatedTestDatabase();
+const { pool } = database;
+after(() => database.close());
+const { seedConsumerFinanceDemo } = await import('../db/consumer-finance-demo.js');
+const { registerFinanceAccountApi } = await import('../routes/finance-accounts.js');
+const { loadFinanceAccountFacts, readExecutionCashBasis } = await import('./finance-facts.js');
 
 test('A00 fixture repeats without changing historical facts; A01 restricts cash and revocation', async () => {
   const client = await pool.connect();
@@ -165,6 +169,11 @@ test('A00 fixture repeats without changing historical facts; A01 restricts cash 
     await client.query('ROLLBACK TO SAVEPOINT obligations');
 
     const url = `/api/finance/accounts/${fixture.accountId}/revocations`;
+    const affectedPeriods = (await client.query<{ id: string }>(`SELECT id FROM budget_periods
+      WHERE owner_id=$1 AND primary_account_id=$2 AND status='active' ORDER BY id`,
+    [fixture.ownerId, fixture.accountId])).rows.map((row) => row.id);
+    assert.equal(affectedPeriods.length, 2);
+    assert.ok(affectedPeriods.includes(fixture.periodId));
     const body = { expectedStatus: 'linked' };
     const headers = { origin: config.webOrigin, 'idempotency-key': 'a01-revoke-0001', 'x-test-user': 'owner' };
     assert.equal((await app.inject({ method: 'POST', url, headers: { ...headers, 'x-test-user': 'other' }, payload: body })).statusCode, 404);
@@ -174,7 +183,7 @@ test('A00 fixture repeats without changing historical facts; A01 restricts cash 
     const revoked = await app.inject({ method: 'POST', url, headers, payload: body });
     assert.equal(revoked.statusCode, 200);
     assert.equal(revoked.json().data.status, 'revoked');
-    assert.deepEqual(revoked.json().data.affectedPeriodIds, [fixture.periodId]);
+    assert.deepEqual([...revoked.json().data.affectedPeriodIds].sort(), affectedPeriods);
     assert.equal(revoked.json().data.financialVersion, first.account.financialVersion + 1);
     const periodAfter = (await client.query<{ version: string }>(
       'SELECT version FROM budget_periods WHERE id=$1', [fixture.periodId],
@@ -226,6 +235,5 @@ test('A00 fixture repeats without changing historical facts; A01 restricts cash 
     await app.close();
     await client.query('ROLLBACK');
     client.release();
-    await closePool();
   }
 });

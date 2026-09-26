@@ -1,3 +1,4 @@
+import { finishClosedOrderBudget } from './closed-order-budget.js';
 import type { PoolClient } from 'pg';
 import { transaction } from '../db/client.js';
 import { config } from '../config.js';
@@ -195,6 +196,7 @@ export async function processChannelJob(job: ClaimedJob, adapter = channelAdapte
       } else {
         await client.query("UPDATE orders SET payment_status='closed',status='cancelled',reserved_minor=0,updated_at=now() WHERE id=$1",[current.order_id]);
         await client.query("UPDATE payment_attempts SET status='closed',observed_at=now() WHERE order_id=$1",[current.order_id]);
+        await finishClosedOrderBudget(client, current.owner_id, current.order_id);
       }
     }
     const explicitQuery=job.type==='sandbox_refund_recheck' || job.type==='sandbox_payment_recheck';

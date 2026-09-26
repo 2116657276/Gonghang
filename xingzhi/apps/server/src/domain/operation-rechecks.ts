@@ -29,7 +29,9 @@ async function relatedOrderForOperation(client: PoolClient, type: string, entity
   }
   if (['simulate_refund_batch', 'sandbox_refund', 'sandbox_refund_recheck'].includes(type)) {
     const result = await client.query<{ order_id: string; merchant_id: string }>(
-      'SELECT order_id, merchant_id FROM refund_batches WHERE id = $1', [entityId],
+      `SELECT o.id AS order_id,COALESCE(o.merchant_id,m.merchant_id) AS merchant_id
+       FROM refund_batches b JOIN orders o ON o.id=b.order_id
+       LEFT JOIN consumer_order_merchants m ON m.order_id=o.id WHERE b.id=$1`, [entityId],
     );
     return result.rows[0];
   }
