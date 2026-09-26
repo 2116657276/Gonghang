@@ -16,14 +16,14 @@ function evaluate(source, imports = {}, globals = {}) {
   return context.exports;
 }
 const format = evaluate(fs.readFileSync(path.join(root, 'lib/format.ts'), 'utf8'));
-function page(file, names, api, globals = {}) {
+function page(file, names, api, globals = {}, taroOverrides = {}) {
   const filename = path.join(root, file);
   const { descriptor } = parse(fs.readFileSync(filename, 'utf8'));
   assert.equal(compileTemplate({ source: descriptor.template.content, filename, id: 'test' }).errors.length, 0);
   let load;
   const result = evaluate(descriptor.scriptSetup.content + `\nexport { ${names.join(',')} };`, {
     vue: { ...vue, onBeforeUnmount: () => {} },
-    '@tarojs/taro': { default: { redirectTo: async () => {}, showModal: async () => ({ confirm: true }) }, useLoad: callback => { load = callback; } },
+    '@tarojs/taro': { default: { redirectTo: async () => {}, showModal: async () => ({ confirm: true }), ...taroOverrides }, useLoad: callback => { load = callback; } },
     '@/lib/api': { api }, '@/lib/errors': { errorMessage: e => e.message ?? String(e) }, '@/lib/format': format,
   }, globals);
   return { ...result, load };
@@ -70,7 +70,34 @@ test('未知缺口保持未知，提交前验证商品与评估范围', () => {
   assert.equal(p.assessmentGap.value, '尚无法确定'); assert.equal(p.canCreate.value, false);
   p.assessment.value = assessment('A'); assert.equal(p.assessmentGap.value, '¥0'); assert.equal(p.canCreate.value, true);
   p.selected.value = offer('B'); assert.equal(p.canCreate.value, false);
-  assert.match(fs.readFileSync(path.join(root, 'pages/offers/index.vue'), 'utf8'), /:value="assessmentGap"/);
+});
+test('候选核对失败与旧响应晚到均不能沿用旧报价；提交中重复点击只建立一次', async () => {
+  const stale = deferred(), submitted = deferred(), sent = [];
+  const p = offersPage({
+    offerQuote: id => id === 'A' ? stale.promise : id === 'B'
+      ? Promise.reject(new Error('报价暂不可用')) : Promise.resolve({ data: quote(id) }),
+    assessPurchase: async body => ({ data: assessment(body.quoteId.slice(-1)) }),
+    createPurchaseIntent: body => { sent.push(body); return submitted.promise; },
+  });
+  const old = p.choose(offer('A'));
+  await p.choose(offer('B'));
+  assert.match(p.error.value, /报价暂不可用/);
+  assert.equal(p.canCreate.value, false);
+  stale.resolve({ data: quote('A') }); await old;
+  assert.equal(p.quote.value, null);
+  assert.equal(p.assessment.value, null);
+  await p.createIntent(); assert.equal(sent.length, 0);
+  await p.choose(offer('C'));
+  assert.equal(p.error.value, '');
+  const first = p.createIntent();
+  await p.createIntent();
+  await p.choose(offer('D'));
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].quoteId, 'quote-C');
+  assert.equal(sent[0].assessmentId, 'assessment-C');
+  assert.equal(p.selected.value.id, 'C');
+  submitted.resolve({ data: { purchaseIntentId: 'intent-C' } });
+  await first;
 });
 test('意外支出使用上海日期：凌晨及月初跨日，并拒绝过去日期', async () => {
   for (const date of ['2026-09-26', '2026-10-01', '2027-01-01']) {
@@ -92,6 +119,36 @@ test('单项比较失败不丢弃已读取的周期依据', async () => {
   });
   await p.load({ periodId: 'period', itemId: 'item' });
   assert.equal(p.period.value.period.periodId, 'period'); assert.equal(p.error.value, ''); assert.equal(p.impactError.value, '单项暂不可用');
+  const stale = page('pages/impact/detail.vue', ['period', 'itemImpact', 'error', 'impactError'], {
+    period: async () => ({ data: { period: { periodId: 'period' },
+      basis: { financialVersion: 3, periodVersion: 5 }, items: [{ itemId: 'item', status: 'planned' }] } }),
+    budgetItemImpact: async () => ({ data: { financialVersion: 2, periodVersion: 5 } }),
+  });
+  await stale.load({ periodId: 'period', itemId: 'item' });
+  assert.equal(stale.period.value.period.periodId, 'period');
+  assert.equal(stale.itemImpact.value, null);
+  assert.equal(stale.error.value, '');
+  assert.match(stale.impactError.value, /依据已经变化/);
+});
+
+test('单项影响沿用服务端剩余金额和比较结果，不在页面重复扣除已入账金额', async () => {
+  const p = page('pages/impact/detail.vue', ['period', 'itemImpact', 'itemHeadroomImpact', 'impactError'], {
+    period: async () => ({ data: {
+      period: { periodId: 'period' }, basis: { financialVersion: 4, periodVersion: 7,
+        confirmedCashMinor: 170000, minimumSavingsHeadroomMinor: 28000 },
+      items: [{ itemId: 'item', status: 'planned', userEstimatedAmountMinor: 8000 }],
+    } }),
+    budgetItemImpact: async () => ({ data: { financialVersion: 4, periodVersion: 7,
+      estimatedMinor: 8000, coveredMinor: 3000, remainingMinor: 5000,
+      withItem: { minimumSavingsHeadroomMinor: 28000 },
+      withoutItem: { minimumSavingsHeadroomMinor: 33000 } } }),
+  });
+  await p.load({ periodId: 'period', itemId: 'item' });
+  assert.equal(p.impactError.value, '');
+  assert.equal(p.itemImpact.value.coveredMinor, 3000);
+  assert.equal(p.itemImpact.value.remainingMinor, 5000);
+  assert.equal(p.itemHeadroomImpact.value, -5000);
+  assert.equal(p.period.value.basis.confirmedCashMinor, 170000);
 });
 
 test('合并后意外安排保留上海日期，并要求手动选择方案才能确认', async () => {
@@ -109,4 +166,37 @@ test('合并后意外安排保留上海日期，并要求手动选择方案才�
   await p.confirm(); assert.equal(sent.length, 0);
   p.selected.value = 'option'; await p.confirm();
   assert.equal(sent.length, 1); assert.equal(sent[0].acceptedOptionId, 'option');
+});
+
+test('意外安排拒绝周期外日期，确认弹窗未完成前重复点击不得重复提交', async () => {
+  class FixedDate extends Date { constructor(...args) { super(...(args.length ? args : ['2026-09-26T01:00:00+08:00'])); } }
+  const modals = [], sent = [];
+  const p = page('pages/emergency/index.vue', ['period', 'plannedOn', 'assess', 'confirm', 'selected', 'proposal', 'saving', 'error'], {
+    assessEmergency: async () => ({ data: { adjustmentId: 'adjustment', basisFinancialVersion: 1,
+      basisPeriodVersion: 1, options: [{ optionId: 'A' }, { optionId: 'B' }] } }),
+    confirmAdjustment: async (id, body) => { sent.push({ id, ...body }); },
+  }, { Date: FixedDate }, { showModal: () => { const modal = deferred(); modals.push(modal); return modal.promise; } });
+  p.period.value = { period: { periodId: 'period', monthStart: '2026-09-01', monthEnd: '2026-09-30' },
+    basis: { financialVersion: 1, periodVersion: 1 } };
+  p.plannedOn.value = '2026-10-01';
+  await p.assess(); assert.match(p.error.value, /本周期/);
+  assert.equal(p.proposal.value, null);
+  p.plannedOn.value = '2026-09-26';
+  await p.assess(); p.selected.value = 'A';
+  const cancelled = p.confirm();
+  assert.equal(p.saving.value, true);
+  modals[0].resolve({ confirm: false });
+  await cancelled;
+  assert.equal(p.saving.value, false);
+  assert.equal(sent.length, 0);
+  // Two taps can arrive before the native confirmation callback resolves.
+  const first = p.confirm();
+  p.selected.value = 'B'; // The confirmation must retain the option shown when it was opened.
+  const second = p.confirm();
+  for (const modal of modals.slice(1)) modal.resolve({ confirm: true });
+  await Promise.all([first, second]);
+  assert.equal(sent.length, 1);
+  assert.equal(modals.length, 2);
+  assert.equal(sent[0].acceptedOptionId, 'A');
+  assert.equal(p.saving.value, false);
 });

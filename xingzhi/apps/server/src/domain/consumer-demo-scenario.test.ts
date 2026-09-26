@@ -8,6 +8,8 @@ import { seedConsumerDemoScenario } from '../db/consumer-demo-scenario.js';
 
 const connection = new URL(config.databaseUrl);
 assert.ok(['localhost', '127.0.0.1'].includes(connection.hostname), '场景测试只允许本机数据库');
+assert.match(connection.pathname, /^\/xingzhi_(?:dev|test(?:_[a-z0-9_]+)?|m1_acceptance_[a-z0-9_]+)$/,
+  '场景测试只允许使用行止本机开发库或显式命名的隔离测试库');
 const admin = new Pool({ connectionString: connection.toString() });
 const schema = `xz_scenario_${randomUUID().replaceAll('-', '')}`;
 connection.searchParams.set('options', `-c search_path=${schema}`);
