@@ -18,7 +18,7 @@ useDidShow(() => void overview.load());
     <StatePanel v-if="overview.loading.value" title="正在读取个人资料" />
     <StatePanel v-else-if="overview.error.value" title="个人资料暂时不可用" :detail="overview.error.value" tone="error"><button class="secondary-button retry" @tap="overview.load">重新加载</button></StatePanel>
     <template v-else-if="overview.user.value">
-      <SectionCard class="identity"><IpAvatar size="large"/><text class="name">{{ overview.user.value.displayName }}</text><StatusBadge label="消费者" tone="success"/></SectionCard>
+      <SectionCard class="identity"><IpAvatar size="large"/><text class="name">{{ overview.user.value.displayName }}</text><StatusBadge label="行止消费者" tone="info"/></SectionCard>
       <SectionCard class="details">
         <FactRow label="登录邮箱" :value="overview.user.value.email" />
         <FactRow label="账户数量" :value="`${overview.accounts.value.length} 个`" />
@@ -32,5 +32,5 @@ useDidShow(() => void overview.load());
 
 <style lang="scss">
 @use '../../styles/tokens' as *;
-.back{position:absolute;z-index:4;top:calc(34px + env(safe-area-inset-top));right:28px;width:64px;height:64px;color:$brand-deep;background:rgba(255,255,255,.7);border-radius:50%;font-size:44px}.retry{margin-top:18px}.identity{display:flex;flex-direction:column;align-items:center;gap:14px;text-align:center}.name{font-size:32px;font-weight:740}.details,.note{margin-top:16px}
+.back{position:absolute;z-index:4;top:calc(34px + env(safe-area-inset-top));right:28px;width:64px;height:64px;color:$brand-deep;background:rgba(255,255,255,.78);border-radius:50%;font-size:44px}.retry{margin-top:24px}.identity{display:flex;flex-direction:column;align-items:center;gap:20px;padding-top:40px;padding-bottom:40px;text-align:center;background:linear-gradient(145deg,$surface-tint,#fff)}.identity :deep(.ip-avatar--large){width:144px;height:144px}.name{font-size:40px;font-weight:760;line-height:1.25}.details,.note{margin-top:24px}.note{padding:28px 30px;font-size:28px;line-height:1.65}
 </style>

@@ -32,10 +32,10 @@ onMounted(loadSession);
 
 <template>
   <LoginView v-if="!user" :busy="busy" :error="error" @login="login" />
-  <AppShell v-else :user="user" :title="user.role === 'consumer' ? '把变化留在可控范围内' : user.role === 'merchant_admin' ? '本地测试商户' : '只读审核视图'" @logout="logout">
-    <section v-if="user.role === 'consumer'" class="ledger-section">
+  <AppShell v-else :user="user" :title="user.role === 'consumer' ? '消费者入口已统一' : user.role === 'merchant_admin' ? '商户订单与退款工作台' : '预算证据审核工作台'" @logout="logout">
+    <section v-if="user.role === 'consumer'" class="ledger-section consumer-migration">
       <p class="eyebrow">消费者入口已统一</p>
-      <h2>请使用新版行止消费者端</h2>
+      <h2>消费者入口已经统一</h2>
       <p class="muted">旧计划写流程已经停用，避免绕过账户、预算周期和本人确认规则。</p>
       <a class="primary-button consumer-entry" href="http://localhost:5173">打开新版消费者端</a>
     </section>
@@ -45,5 +45,8 @@ onMounted(loadSession);
 </template>
 
 <style scoped>
-.consumer-entry { display:inline-flex; margin-top:18px; text-decoration:none; }
+.consumer-migration { max-width:720px; margin:0 auto; padding:36px; text-align:center; }
+.consumer-migration h2 { margin:0; color:#173f45; font-size:26px; }
+.consumer-migration .muted { max-width:560px; margin:14px auto 0; font-size:16px; }
+.consumer-entry { display:inline-flex; align-items:center; justify-content:center; margin-top:24px; text-decoration:none; }
 </style>

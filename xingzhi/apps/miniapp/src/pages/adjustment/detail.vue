@@ -29,7 +29,7 @@ useLoad(async options => {
     <StatePanel v-if="!value&&!error" title="正在读取调整结果" />
     <StatePanel v-else-if="error" title="调整结果不可用" :detail="error" tone="error" />
     <template v-else-if="value">
-      <SectionCard>
+      <SectionCard class="summary-card">
         <view class="row-between"><text class="title">{{value.reason}}</text><StatusBadge :label="statusLabel(value.status)" :tone="value.status==='complete'?'success':'info'" /></view>
         <FactRow label="意外支出" :value="yuan(value.proposedChanges.emergency.amountMinor)" />
         <FactRow label="计划日期" :value="shortDate(value.proposedChanges.emergency.plannedOn)" />
@@ -49,14 +49,14 @@ useLoad(async options => {
           </view>
         </view>
       </SectionCard>
-      <StatePanel v-else title="没有关联订单善后" detail="本次调整不需要取消订单或等待退款。" />
+      <view v-else class="compact-empty">本次不涉及订单善后，不需要取消订单或等待退款。</view>
     </template>
   </PageShell>
 </template>
 
 <style lang="scss">
 @use '../../styles/tokens' as *;
-.back{position:absolute;right:28px;top:calc(34px + env(safe-area-inset-top));width:64px;height:64px;border-radius:50%;font-size:42px}
-.title{font-size:27px;font-weight:720}.note,.block{margin-top:18px}.cancel{margin-top:14px;padding-top:10px;border-top:1px solid $border}
-.actions{display:flex;justify-content:flex-end;gap:12px;margin-top:10px}.text-button{min-height:58px;padding:0 18px;font-size:20px}
+.back{position:absolute;right:28px;top:calc(34px + env(safe-area-inset-top));width:64px;height:64px;border-radius:50%;font-size:44px}.summary-card{background:linear-gradient(145deg,$surface-tint,#fff)}
+.title{font-size:36px;font-weight:740;line-height:1.4}.note,.block{margin-top:24px}.note{font-size:28px;line-height:1.65}.cancel{margin-top:20px;padding-top:18px;border-top:1px solid $border}
+.actions{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:18px}.text-button{min-height:88px;padding:0 18px;color:$brand-primary;background:$soft-surface;border-radius:18px;font-size:27px}.compact-empty{margin-top:24px;padding:22px 24px;color:$text-secondary;background:$soft-surface;border-radius:22px;font-size:28px;line-height:1.55}@media screen and (max-width:360px){.actions{grid-template-columns:1fr}.row-between{align-items:flex-start}}
 </style>

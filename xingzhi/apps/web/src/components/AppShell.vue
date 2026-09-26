@@ -4,7 +4,7 @@ import type { User } from '../lib/types';
 defineProps<{ user: User; title: string }>();
 const emit = defineEmits<{ logout: [] }>();
 
-const roleLabel = (role: User['role']) => ({ consumer: '消费者', merchant_admin: '测试商户', reviewer: '审核者' })[role];
+const roleLabel = (role: User['role']) => ({ consumer: '消费者', merchant_admin: '商户管理员', reviewer: '只读审核者' })[role];
 </script>
 
 <template>

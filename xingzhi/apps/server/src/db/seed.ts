@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { closePool, transaction } from './client.js';
 import { hashPassword } from '../auth/password.js';
 
@@ -20,6 +20,14 @@ try {
     for (const account of accounts) {
       const existing = await client.query<{ id: string }>('SELECT id FROM users WHERE email = $1', [account.email]);
       if (existing.rows[0]) {
+        if (account.role === 'merchant_admin' || account.role === 'reviewer') {
+          await client.query(
+            'UPDATE users SET password_hash = $1 WHERE id = $2',
+            [await hashPassword(password), existing.rows[0].id],
+          );
+          const identityDigest = createHash('sha256').update(account.email).digest('hex');
+          await client.query('DELETE FROM login_attempt_limits WHERE identity_digest = $1', [identityDigest]);
+        }
         users.set(account.role, existing.rows[0].id);
         continue;
       }

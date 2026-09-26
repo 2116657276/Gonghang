@@ -68,5 +68,5 @@ useLoad(options => { orderId.value = options.orderId ?? ''; void load(); });
 
 <style lang="scss">
 @use '../../styles/tokens' as *;
-.back{position:absolute;z-index:4;top:calc(34px + env(safe-area-inset-top));right:28px;width:64px;height:64px;color:$brand-deep;background:rgba(255,255,255,.7);border-radius:50%;font-size:44px}.retry{margin-top:18px}.title{font-size:27px;font-weight:720}.note{margin-top:18px}.full{width:100%;margin-top:16px}.result,.page-error{margin-top:16px}
+.back{position:absolute;z-index:4;top:calc(34px + env(safe-area-inset-top));right:28px;width:64px;height:64px;color:$brand-deep;background:rgba(255,255,255,.78);border-radius:50%;font-size:44px}.retry{margin-top:24px}.title{font-size:36px;font-weight:740}.note{margin-top:22px;font-size:28px;line-height:1.65}.full{width:100%;margin-top:18px}.result,.page-error{margin-top:24px}.result{background:linear-gradient(145deg,$surface-tint,#fff)}
 </style>

@@ -19,9 +19,9 @@ useDidShow(() => void overview.load());
     <template v-else>
       <view v-if="overview.periods.value.length" class="list">
         <SectionCard v-for="value in overview.periods.value" :key="value.period.periodId" @tap="Taro.navigateTo({url:`/pages/review/index?periodId=${value.period.periodId}`})">
-          <view class="row-between"><text class="title">{{ value.period.monthStart.slice(0,7).replace('-','年') }}月复盘</text><StatusBadge :label="value.period.status==='closed'?'完整复盘':'阶段复盘'" :tone="value.period.status==='closed'?'success':'info'"/></view>
+          <view class="row-between"><text class="title">{{ value.period.monthStart.slice(0,7).replace('-','年') }}月复盘</text><StatusBadge :label="value.period.status==='closed'?'已归档 · 查看复盘':'执行中 · 阶段回看'" :tone="value.period.status==='closed'?'neutral':'info'"/></view>
           <text class="summary">{{ value.items.length }} 项计划 · 保留目标 {{ yuan(value.basis.savingsTargetMinor) }}</text>
-          <text class="detail">查看事实与事件 ›</text>
+          <text class="detail">查看事实与事件</text>
         </SectionCard>
       </view>
       <StatePanel v-else title="暂无可复盘周期" detail="建立预算周期并记录计划后，才能生成对应的月度复盘。" />
@@ -31,5 +31,5 @@ useDidShow(() => void overview.load());
 
 <style lang="scss">
 @use '../../styles/tokens' as *;
-.back{position:absolute;z-index:4;top:calc(34px + env(safe-area-inset-top));right:28px;width:64px;height:64px;color:$brand-deep;background:rgba(255,255,255,.7);border-radius:50%;font-size:44px}.retry{margin-top:18px}.list{display:grid;gap:14px}.title{font-size:27px;font-weight:710}.summary,.detail{display:block}.summary{margin-top:16px;color:$text-secondary;font-size:21px}.detail{margin-top:18px;color:$brand-primary;font-size:21px;text-align:right}
+.back{position:absolute;z-index:4;top:calc(34px + env(safe-area-inset-top));right:28px;width:64px;height:64px;color:$brand-deep;background:rgba(255,255,255,.78);border-radius:50%;font-size:44px}.retry{margin-top:24px}.list{display:grid;gap:20px}.title{font-size:34px;font-weight:730;line-height:1.35}.summary,.detail{display:block}.summary{margin-top:20px;color:$text-secondary;font-size:28px;line-height:1.55}.detail{margin-top:22px;color:$brand-primary;font-size:28px;font-weight:650;text-align:right}@media screen and (max-width:360px){.row-between{align-items:flex-start;gap:14px}.row-between .status-badge{max-width:240px}}
 </style>

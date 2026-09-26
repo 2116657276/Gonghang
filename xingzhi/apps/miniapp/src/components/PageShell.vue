@@ -7,7 +7,7 @@ const systemInsetStyle = getSystemInsetStyle();
 <template>
   <view class="page-shell" :style="systemInsetStyle">
     <view class="hero" :class="{ 'hero--compact': compact }">
-      <view class="hero__sun" /><view class="hero__hill hero__hill--one"/><view class="hero__hill hero__hill--two"/>
+      <view class="hero__wash hero__wash--one" /><view class="hero__wash hero__wash--two" />
       <view class="hero__copy"><text class="hero__title">{{ title }}</text><text class="hero__subtitle">{{ subtitle }}</text></view>
       <slot name="hero" />
     </view>
@@ -18,15 +18,20 @@ const systemInsetStyle = getSystemInsetStyle();
 <style lang="scss">
 @use '../styles/tokens' as *;
 .page-shell { min-height:100vh; overflow:hidden; background:$background; }
-.hero { position:relative; min-height:250px; padding:var(--app-safe-top, calc(42px + env(safe-area-inset-top))) 32px 48px; overflow:hidden; background:linear-gradient(180deg,#E7EFEA 0%,#F4F7F5 100%); }
-.hero--compact { min-height:205px; }
-.hero__copy { position:relative; z-index:2; padding-right:92px; }
-.hero__title { display:block; color:$brand-deep; font-size:46px; font-weight:760; letter-spacing:-.045em; }
-.hero__subtitle { display:block; margin-top:8px; color:$text-secondary; font-size:28px; line-height:1.45; }
-.hero__sun { position:absolute; right:82px; top:54px; width:68px; height:68px; border-radius:50%; background:rgba(235,193,108,.25); }
-.hero__hill { position:absolute; bottom:-105px; border-radius:50%; background:rgba(139,175,132,.12); transform:rotate(-5deg); }
-.hero__hill--one { left:-100px; width:620px; height:230px; }
-.hero__hill--two { right:-180px; width:630px; height:250px; background:rgba(47,111,90,.08); transform:rotate(7deg); }
-.page-shell__content { position:relative; z-index:3; width:100%; max-width:750px; margin:-30px auto 0; padding:0 24px 36px; }
-@media screen and (max-width:360px){.hero{min-height:238px;padding-right:24px;padding-left:24px}.hero--compact{min-height:200px}.hero__copy{padding-right:82px}.page-shell__content{padding-right:18px;padding-left:18px}}
+.hero {
+  position:relative;
+  min-height:224px;
+  padding:var(--app-safe-top, calc(42px + env(safe-area-inset-top))) 32px 28px;
+  overflow:hidden;
+  background:linear-gradient(180deg,#EEF8F2 0%,#F7FAF7 100%);
+}
+.hero--compact { min-height:190px; }
+.hero__copy { position:relative; z-index:2; padding-right:96px; }
+.hero__title { display:block; color:$brand-deep; font-size:48px; font-weight:700; line-height:1.3; letter-spacing:-.035em; overflow-wrap:anywhere; }
+.hero__subtitle { display:block; margin-top:12px; color:$text-secondary; font-size:28px; line-height:1.5; }
+.hero__wash { position:absolute; border-radius:50%; pointer-events:none; }
+.hero__wash--one { right:-110px; top:-82px; width:300px; height:230px; background:rgba(225,245,234,.8); }
+.hero__wash--two { left:-150px; bottom:-120px; width:440px; height:220px; background:rgba(232,241,255,.42); }
+.page-shell__content { position:relative; z-index:3; width:100%; max-width:1000px; margin:0 auto; padding:0 32px 48px; }
+@media screen and (max-width:360px){.hero{min-height:216px;padding-right:24px;padding-left:24px}.hero--compact{min-height:184px}.hero__copy{padding-right:84px}.page-shell__content{padding-right:24px;padding-left:24px}}
 </style>
