@@ -6,7 +6,9 @@ page {
   color: $text-primary;
   background: $background;
   font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif;
-  font-size: 30px;
+  font-size: 32px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
 }
 
 view, text, input, textarea, button, image { box-sizing: border-box; }
@@ -22,7 +24,7 @@ button {
 }
 button::after { border: 0; }
 
-.page-safe-bottom { height: calc(28px + env(safe-area-inset-bottom)); }
+.page-safe-bottom { height: calc(32px + env(safe-area-inset-bottom)); }
 .muted { color: $text-secondary; }
 .tertiary { color: $text-tertiary; }
 .amount { font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
@@ -34,23 +36,36 @@ button::after { border: 0; }
 .primary-button,
 .secondary-button {
   display: flex;
-  min-height: 88px;
+  min-height: 96px;
   align-items: center;
   justify-content: center;
   padding: 0 32px;
-  border-radius: 999px;
-  font-size: 29px;
+  border-radius: $radius-control;
+  font-size: 32px;
   font-weight: 600;
+  line-height: 1.25;
+  transition: background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
 }
-.primary-button { color: #fff; background: linear-gradient(135deg, #3A7A63 0%, #2B6652 100%); }
+.primary-button { color: #fff; background: $brand-primary; }
 .secondary-button { color: $brand-primary; background: $soft-surface; border: 1px solid $border; }
 .primary-button[disabled], .secondary-button[disabled] { opacity: .5; }
+.primary-button:active { background: $brand-deep; }
+.secondary-button:active { background: $surface-tint; border-color: rgba(38, 125, 98, .32); }
 
-.link-button { color: $brand-primary; font-size: 27px; font-weight: 600; }
-.notice { padding: 20px 24px; border-radius: 18px; font-size: 27px; line-height: 1.55; }
-.notice--info { color: $brand-deep; background: $surface-tint; border: 1px solid #C9DDD2; }
-.notice--warning { color: #7A5524; background: $warning-surface; border: 1px solid #EAD3B0; }
-.notice--error { color: $danger; background: $danger-surface; border: 1px solid #E7C5C1; }
+.link-button {
+  display: inline-flex;
+  min-height: 88px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 12px;
+  color: $brand-primary;
+  font-size: 28px;
+  font-weight: 600;
+}
+.notice { padding: 20px 24px; border-radius: 24px; font-size: 28px; line-height: 1.55; }
+.notice--info { color: $info; background: $info-surface; border: 1px solid rgba(54, 95, 137, .18); }
+.notice--warning { color: $warning; background: $warning-surface; border: 1px solid rgba(133, 80, 26, .18); }
+.notice--error { color: $danger; background: $danger-surface; border: 1px solid rgba(175, 57, 65, .18); }
 
 /* Taro H5 会为未配置图标的文字型 tabBar 渲染空图片节点。 */
 .weui-tabbar__icon:not([src]) { display: none; }
@@ -63,6 +78,11 @@ button::after { border: 0; }
 
 @media screen and (max-width: 360px) {
   .primary-button,
-  .secondary-button { min-height: 82px; padding-right: 24px; padding-left: 24px; }
+  .secondary-button { padding-right: 24px; padding-left: 24px; }
   .notice { padding: 18px 20px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .primary-button,
+  .secondary-button { transition: none; }
 }

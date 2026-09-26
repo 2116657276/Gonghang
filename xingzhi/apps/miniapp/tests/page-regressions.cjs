@@ -23,7 +23,7 @@ function page(file, names, api, globals = {}) {
   let load;
   const result = evaluate(descriptor.scriptSetup.content + `\nexport { ${names.join(',')} };`, {
     vue: { ...vue, onBeforeUnmount: () => {} },
-    '@tarojs/taro': { default: { redirectTo: async () => {} }, useLoad: callback => { load = callback; } },
+    '@tarojs/taro': { default: { redirectTo: async () => {}, showModal: async () => ({ confirm: true }) }, useLoad: callback => { load = callback; } },
     '@/lib/api': { api }, '@/lib/errors': { errorMessage: e => e.message ?? String(e) }, '@/lib/format': format,
   }, globals);
   return { ...result, load };
@@ -92,4 +92,21 @@ test('单项比较失败不丢弃已读取的周期依据', async () => {
   });
   await p.load({ periodId: 'period', itemId: 'item' });
   assert.equal(p.period.value.period.periodId, 'period'); assert.equal(p.error.value, ''); assert.equal(p.impactError.value, '单项暂不可用');
+});
+
+test('合并后意外安排保留上海日期，并要求手动选择方案才能确认', async () => {
+  class FixedDate extends Date { constructor(...args) { super(...(args.length ? args : ['2026-09-26T01:00:00+08:00'])); } }
+  const sent = [];
+  const proposal = { adjustmentId: 'adjustment', basisFinancialVersion: 1, basisPeriodVersion: 1,
+    options: [{ optionId: 'option', assessment: { status: 'allowed' } }] };
+  const p = page('pages/emergency/index.vue', ['period', 'plannedOn', 'assess', 'confirm', 'selected', 'error'], {
+    assessEmergency: async body => { assert.equal(body.plannedOn, '2026-09-26'); return { data: proposal }; },
+    confirmAdjustment: async (id, body) => { sent.push({ id, ...body }); },
+  }, { Date: FixedDate });
+  p.period.value = { period: { periodId: 'period', monthStart: '2026-09-01', monthEnd: '2026-09-30' },
+    basis: { financialVersion: 1, periodVersion: 1 } };
+  await p.assess(); assert.equal(p.error.value, ''); assert.equal(p.selected.value, '');
+  await p.confirm(); assert.equal(sent.length, 0);
+  p.selected.value = 'option'; await p.confirm();
+  assert.equal(sent.length, 1); assert.equal(sent[0].acceptedOptionId, 'option');
 });

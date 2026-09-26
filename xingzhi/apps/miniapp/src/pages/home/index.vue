@@ -14,7 +14,7 @@ import { useAmountVisibility } from '@/composables/useAmountVisibility';
 import { openAiWithQuestion } from '@/lib/ai-entry';
 import { api } from '@/lib/api';
 import { errorMessage } from '@/lib/errors';
-import { categoryLabel, fundingLabel, shortDate, yuan } from '@/lib/format';
+import { categoryLabel, clockTime, fundingLabel, shortDate, yuan } from '@/lib/format';
 import type { AgentRunSummary, BudgetItem, ConsumerOrder, FinanceAccountFacts, LedgerEntry, PurchaseIntent, RollingCashflow } from '@/lib/types';
 
 type SheetName = 'pending' | 'impact' | 'obligation' | 'plan' | 'ledger' | null;
@@ -23,6 +23,9 @@ type PendingAction = { id: string; title: string; detail: string; url?: string; 
   amountMinor?: number | null; tone: 'info' | 'warning'; preference?: 'planning' | 'orders' | 'refunds' };
 
 const overview = useOverview();
+// Tab pages are cached on devices. Keep the loaded content mounted while
+// refreshing onShow instead of tearing down and recreating the whole subtree.
+const overviewReady = ref(false);
 const activeSheet = ref<SheetName>(null);
 const { balanceVisible, toggleBalanceVisibility } = useAmountVisibility();
 const selectedObligation = ref<Obligation | null>(null);
@@ -54,6 +57,8 @@ async function loadOverviewAndForecast() {
   rollingLoading.value = true;
   await overview.load();
   if (sequence !== rollingLoadSequence) return;
+  if (overview.error.value) { rollingLoading.value = false; return; }
+  overviewReady.value = true;
   const period = overview.currentPeriod.value;
   if (!period || period.period.status !== 'active') { rollingLoading.value = false; return; }
   try {
@@ -109,38 +114,42 @@ const forecastStatus = computed(() => overview.currentPeriod.value?.forecast.sta
 const rollingForecast = computed(() => rolling.value?.forecast ?? null);
 const rollingDaily = computed(() => rollingForecast.value?.daily ?? []);
 const chartDays = computed(() => {
-  const known = rollingDaily.value.filter(day => day.projectedCashMinor !== null);
-  if (!known.length) return [];
-  const count = Math.min(7, known.length);
+  const daily = rollingDaily.value;
+  if (!daily.some(day => day.projectedCashMinor !== null)) return [];
+  const count = Math.min(7, daily.length);
   const indexes = Array.from({ length: count }, (_, index) =>
-    Math.round(index * (known.length - 1) / Math.max(1, count - 1)));
-  return indexes.map(index => known[index]!).filter((day, index, values) => index === 0 || day.on !== values[index - 1]?.on);
+    Math.round(index * (daily.length - 1) / Math.max(1, count - 1)));
+  return indexes.map(index => daily[index]!).filter((day, index, values) => index === 0 || day.on !== values[index - 1]?.on);
 });
 const chartPoints = computed(() => {
   const days = chartDays.value;
-  const values = days.map(day => day.projectedCashMinor as number);
+  const values = days.map(day => day.projectedCashMinor).filter((value): value is number => value !== null);
   if (!values.length) return [];
   const minimum = Math.min(...values);
   const maximum = Math.max(...values);
   const range = Math.max(1, maximum - minimum);
-  return days.map((day, index) => ({
-    on: day.on,
-    value: day.projectedCashMinor as number,
-    left: days.length === 1 ? 50 : 6 + index * 88 / (days.length - 1),
-    top: 16 + (maximum - (day.projectedCashMinor as number)) * 62 / range,
-    minimum: (day.projectedCashMinor as number) === minimum,
-  }));
+  return days.map((day, index) => {
+    const value = day.projectedCashMinor;
+    return {
+      on: day.on,
+      value,
+      left: days.length === 1 ? 50 : 6 + index * 88 / (days.length - 1),
+      top: value === null ? null : 16 + (maximum - value) * 62 / range,
+      minimum: value === minimum,
+    };
+  });
 });
-const chartSegments = computed(() => chartPoints.value.slice(0, -1).map((point, index) => {
+const chartSegments = computed(() => chartPoints.value.slice(0, -1).flatMap((point, index) => {
   const next = chartPoints.value[index + 1]!;
+  if (point.top === null || next.top === null) return [];
   const dx = next.left - point.left;
   const dy = next.top - point.top;
-  return {
+  return [{
     left: point.left,
     top: point.top,
     width: Math.sqrt(dx * dx + dy * dy),
     angle: Math.atan2(dy, dx) * 180 / Math.PI,
-  };
+  }];
 }));
 const lowestDay = computed(() => rollingDaily.value.find(day => day.on === rollingForecast.value?.minimumCashOn) ?? null);
 const rollingHeadroom = computed(() => lowestDay.value?.savingsHeadroomMinor ?? null);
@@ -167,8 +176,7 @@ const factTime = computed(() => {
   if (!value) return '暂无资金快照时间';
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return '资金快照时间待确认';
-  const formatted = new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', month: 'numeric', day: 'numeric',
-    hour: '2-digit', minute: '2-digit', hour12: false }).format(date);
+  const formatted = `${shortDate(value)} ${clockTime(value)}`;
   return `${account?.cashBasis.dataStatus === 'observed' ? '资金依据' : '最近快照'} ${formatted}`;
 });
 const cashflowSummary = computed(() => {
@@ -248,7 +256,10 @@ function handleSheetPrimary() {
   if (sheet === 'plan' && selectedPlan.value && overview.currentPeriod.value) return Taro.navigateTo({ url: `/pages/item/detail?periodId=${overview.currentPeriod.value.period.periodId}&itemId=${selectedPlan.value.itemId}` });
   if (sheet === 'impact' && overview.currentPeriod.value) return Taro.navigateTo({ url: `/pages/impact/detail?periodId=${overview.currentPeriod.value.period.periodId}` });
 }
-function openAccount() { const id=overview.primaryAccount.value?.account.accountId;if(id)void Taro.navigateTo({url:`/pages/account/detail?id=${id}`}); }
+function openAccount() {
+  const id = overview.primaryAccount.value?.account.accountId;
+  void Taro.navigateTo({ url: id ? `/pages/account/detail?id=${id}` : '/pages/account/select' });
+}
 </script>
 
 <template>
@@ -258,13 +269,15 @@ function openAccount() { const id=overview.primaryAccount.value?.account.account
         <text class="pending-button__bell">⌁</text><text v-if="pendingActions.length" class="pending-button__count">{{ pendingActions.length>9?'9+':pendingActions.length }}</text>
       </button>
     </template>
-    <StatePanel v-if="overview.loading.value" title="正在读取当前资金事实" detail="只展示服务端已经确认的数据。" />
-    <StatePanel v-else-if="overview.error.value" title="暂时无法读取首页" :detail="overview.error.value" tone="error"><button class="secondary-button retry" @tap="loadOverviewAndForecast">重新加载</button></StatePanel>
+    <StatePanel v-if="!overviewReady && overview.loading.value" title="正在读取当前资金事实" detail="只展示服务端已经确认的数据。" />
+    <StatePanel v-else-if="!overviewReady && overview.error.value" title="暂时无法读取首页" :detail="overview.error.value" tone="error"><button class="secondary-button retry" @tap="loadOverviewAndForecast">重新加载</button></StatePanel>
     <template v-else>
+      <view v-if="overview.loading.value" class="notice">正在更新账户和计划，当前显示上次读取的数据。</view>
+      <view v-else-if="overview.error.value" class="notice notice--error">刷新失败，当前显示上次读取的数据：{{ overview.error.value }}<button class="link-button" @tap="loadOverviewAndForecast">重新加载 ›</button></view>
       <view class="summary-grid">
         <view class="section-card summary-card summary-card--account" @tap="openAccount">
           <view class="summary-card__heading">
-            <view class="summary-card__identity"><view class="summary-card__icon summary-card__icon--account" aria-hidden="true"><view class="account-icon__stripe"/><view class="account-icon__chip"/></view><view><text class="summary-card__eyebrow">账户概览</text><text class="summary-card__label">我的主账户</text></view></view>
+            <view class="summary-card__identity"><view class="summary-card__icon summary-card__icon--account" aria-hidden="true"><view class="account-icon__stripe"/><view class="account-icon__chip"/></view><text class="summary-card__label">我的主账户</text></view>
             <button class="visibility-button" :aria-label="balanceVisible?'隐藏主账户金额':'显示主账户金额'" @tap.stop="toggleBalanceVisibility">{{ balanceVisible ? '隐藏' : '显示' }}</button>
           </view>
           <text class="summary-card__meta">{{ overview.primaryAccount.value?.account.displayName ?? '尚未选择账户' }}</text>
@@ -274,7 +287,7 @@ function openAccount() { const id=overview.primaryAccount.value?.account.account
         </view>
         <view class="section-card summary-card summary-card--forecast" @tap="activeSheet='impact'">
           <view class="summary-card__heading">
-            <view class="summary-card__identity"><view class="summary-card__icon summary-card__icon--forecast" aria-hidden="true"><view class="forecast-icon__bar forecast-icon__bar--one"/><view class="forecast-icon__bar forecast-icon__bar--two"/><view class="forecast-icon__bar forecast-icon__bar--three"/><view class="forecast-icon__line"/></view><view><text class="summary-card__eyebrow">资金预测</text><text class="summary-card__label">未来 30 天</text></view></view>
+            <view class="summary-card__identity"><view class="summary-card__icon summary-card__icon--forecast" aria-hidden="true"><view class="forecast-icon__bar forecast-icon__bar--one"/><view class="forecast-icon__bar forecast-icon__bar--two"/><view class="forecast-icon__bar forecast-icon__bar--three"/><view class="forecast-icon__line"/></view><text class="summary-card__label">未来 30 天</text></view>
             <text class="summary-card__arrow">›</text>
           </view>
           <text class="summary-card__meta">预计最低余额</text>
@@ -283,6 +296,7 @@ function openAccount() { const id=overview.primaryAccount.value?.account.account
           <text class="summary-card__foot">{{ forecastFoot }}</text>
         </view>
       </view>
+      <button v-if="attention.length" class="urgent-brief" @tap="activeSheet='pending'"><view><text>有 {{ pendingActions.length }} 项需要留意</text><text>{{ attention[0]?.title }} · {{ attention[0]?.detail }}</text></view><text aria-hidden="true">›</text></button>
       <view v-if="rollingError" class="notice notice--warning forecast-error">30 天预测暂时不可用：{{ rollingError }}</view>
       <SectionHeader title="未来资金走势" :action="overview.currentPeriod.value ? '查看本月分析' : undefined" @action="activeSheet='impact'" />
       <SectionCard v-if="rollingDaily.length" class="forecast-card">
@@ -290,7 +304,7 @@ function openAccount() { const id=overview.primaryAccount.value?.account.account
         <view v-if="chartPoints.length" class="trend-chart" aria-label="未来资金折线图">
           <view class="trend-chart__grid trend-chart__grid--top"/><view class="trend-chart__grid trend-chart__grid--middle"/><view class="trend-chart__grid trend-chart__grid--bottom"/>
           <view v-for="(segment,index) in chartSegments" :key="`line-${index}`" class="trend-chart__line" :style="`left:${segment.left}%;top:${segment.top}%;width:${segment.width}%;transform:rotate(${segment.angle}deg)`"/>
-          <view v-for="point in chartPoints" :key="point.on" class="trend-chart__point" :class="{'trend-chart__point--minimum':point.minimum}" :style="`left:${point.left}%;top:${point.top}%`"><text>{{ yuan(point.value) }}</text></view>
+          <view v-for="point in chartPoints" v-show="point.top!==null" :key="point.on" class="trend-chart__point" :class="{'trend-chart__point--minimum':point.minimum}" :style="`left:${point.left}%;top:${point.top??0}%`"><text>{{ yuan(point.value) }}</text></view>
           <view class="trend-chart__labels"><text v-for="point in chartPoints" :key="point.on">{{ shortDate(point.on) }}</text></view>
         </view>
         <text v-else class="trend-chart__empty">已登记日期不足，暂时无法绘制走势。</text>
@@ -303,6 +317,7 @@ function openAccount() { const id=overview.primaryAccount.value?.account.account
         <text v-else class="minimum-card__note">当天没有新增安排，之前日期的资金变动仍会影响余额。</text>
         <button class="text-action" @tap="askAboutMinimum">就这一天问行止 ›</button>
       </SectionCard>
+      <view class="ai-entry" @tap="switchTab('/pages/ai/index')"><IpAvatar size="small"/><view class="ai-entry__copy"><text>问问行止</text><text>看看本月安排，先解释再由你决定</text></view><text class="ai-entry__arrow">›</text></view>
       <SectionHeader title="未来安排" />
       <SectionCard v-if="visibleTimeline.length" class="timeline-card">
         <view v-for="item in visibleTimeline" :key="item.id" class="timeline-row">
@@ -313,7 +328,6 @@ function openAccount() { const id=overview.primaryAccount.value?.account.account
         <button v-if="timeline.length>5" class="text-action" @tap="expandedTimeline=!expandedTimeline">{{ expandedTimeline?'收起安排':`查看全部 ${timeline.length} 项` }}</button>
       </SectionCard>
       <StatePanel v-else title="未来 30 天暂无已登记安排" detail="新增房租、还款或预计收入后，会按日期显示在这里。" />
-      <view class="ai-entry" @tap="switchTab('/pages/ai/index')"><IpAvatar size="medium"/><view class="ai-entry__copy"><text>最近想做什么？</text><text>先说想法，行止帮你理清影响</text></view><text class="ai-entry__arrow">›</text></view>
       <SectionHeader title="需要留意" :action="pendingActions.length ? '查看待办' : undefined" @action="activeSheet='pending'" />
       <view v-if="attention.length" class="attention-list">
         <view v-for="item in attention" :key="item.id" class="attention-row" @tap="openPending(item)"><view><text class="attention-row__title">{{ item.title }}</text><text class="attention-row__detail">{{item.detail}}</text></view><view class="attention-row__amount"><text v-if="item.amountMinor!==undefined" class="amount">{{ yuan(item.amountMinor) }}</text><text>›</text></view></view>
@@ -359,7 +373,9 @@ function openAccount() { const id=overview.primaryAccount.value?.account.account
 .trend-chart{height:240px;overflow:hidden}.trend-chart__labels{bottom:8px}.trend-chart__empty{display:block;margin-top:20px;color:$text-secondary;font-size:24px}
 
 /* 两张首页核心卡片用原生 view 渲染，避免真机自定义组件节点丢失。 */
-.section-card{padding:28px;background:$card;border:1px solid rgba(216,226,220,.82);border-radius:20px;box-shadow:$shadow-card}.summary-grid{display:flex;width:100%;align-items:stretch}.summary-card{flex:1 1 0}
-.summary-grid{gap:12px}.summary-card{min-height:320px;padding:22px}.summary-card__identity{gap:10px}.summary-card__identity>view:last-child{min-width:0}.summary-card__eyebrow{font-size:24px}.summary-card__label{font-size:28px;white-space:normal}.summary-card__meta{font-size:25px}.summary-card__amount{font-size:42px}.summary-card__amount--state{font-size:32px}.summary-card__state{font-size:24px}.summary-card__foot{font-size:24px}.visibility-button{padding-right:9px;padding-left:9px;font-size:23px}
-@media screen and (max-width:360px){.summary-grid{gap:10px}.summary-card{min-height:320px;padding:18px 16px}.summary-card__identity{gap:8px}.summary-card__icon{flex-basis:44px;width:44px;height:44px}.summary-card__label{font-size:26px}.summary-card__amount{font-size:36px}.summary-card__amount--state{font-size:30px}.summary-card__foot{font-size:23px}.plan-grid{grid-template-columns:1fr}.attention-row,.ledger-row,.sheet-list__item{align-items:flex-start}.attention-row__amount,.ledger-row__end{flex:0 0 auto}.attention-row__detail,.ledger-row__time{line-height:1.4}.plan-card__amount{white-space:normal}.timeline-row{flex-wrap:wrap}.timeline-row__date{flex-basis:82px}.ai-entry{gap:14px;padding:18px 20px}}
+.summary-grid{display:flex;width:100%;align-items:stretch;gap:24px}.summary-card.section-card{flex:1 1 0;min-width:0;min-height:336px;padding:28px;border:1px solid $border;border-radius:$radius-card;box-shadow:none}.summary-card--account{background:$surface-tint}.summary-card--forecast{background:linear-gradient(155deg,$card 0%,$accent-blue 145%)}.summary-card__identity{gap:16px}.summary-card__label{font-size:32px;font-weight:600;line-height:1.4;white-space:normal}.summary-card__meta{margin-top:20px;font-size:28px}.summary-card__amount{margin-top:8px;font-size:48px;font-weight:700;line-height:1.2;white-space:normal;overflow-wrap:anywhere}.summary-card__amount--state{font-size:36px}.summary-card__state{min-height:48px;padding:8px 12px;font-size:26px}.summary-card__foot{font-size:26px;line-height:1.45}.visibility-button{min-width:76px;min-height:64px;padding:8px 10px;color:$brand-primary;background:rgba(255,255,255,.72);font-size:24px}
+.urgent-brief{display:flex;width:100%;min-height:88px;align-items:center;justify-content:space-between;gap:20px;margin-top:24px;padding:16px 24px;color:$warning;background:$warning-surface;border:1px solid rgba(133,80,26,.16);border-radius:24px;text-align:left}.urgent-brief view{flex:1;min-width:0}.urgent-brief text{display:block;font-size:28px;line-height:1.45}.urgent-brief view text:first-child{font-weight:600}.urgent-brief view text+text{margin-top:4px;color:$text-secondary;font-size:26px}.urgent-brief>text{flex:0 0 auto;font-size:40px}
+.forecast-card{border-radius:$radius-card}.forecast-card__lead-icon{flex-basis:64px;height:64px;border-radius:20px;font-size:28px}.forecast-card__summary{font-size:32px;font-weight:600}.forecast-card__note,.minimum-card__note{font-size:28px}.trend-chart{height:288px;border-radius:24px}.trend-chart__point text,.trend-chart__labels{font-size:22px}.text-action{min-height:88px;font-size:28px}.minimum-card{margin-top:24px;border-radius:$radius-card}.minimum-card__title{font-size:32px}.cause-list{font-size:28px}
+.ai-entry{gap:24px;margin-top:24px;padding:24px 28px;background:$surface-tint;border:1px solid rgba(38,125,98,.12);border-radius:$radius-card;box-shadow:none}.ai-entry__copy text{font-size:32px;font-weight:600}.ai-entry__copy text+text{font-size:28px}.attention-list,.ledger-card,.sheet-list{border-radius:$radius-card}.attention-row{padding:28px 32px}.attention-row__title,.ledger-row__name{font-size:32px}.attention-row__detail,.ledger-row__time{font-size:28px}.plan-grid{gap:24px}.plan-card__title{font-size:32px}.plan-card__amount{font-size:36px}.ledger-row{min-height:128px;padding:24px 4px}.ledger-row__amount{font-size:36px}.sheet-note{font-size:28px}.ledger-detail-amount{font-size:64px}
+@media screen and (max-width:360px){.summary-grid{gap:20px}.summary-card.section-card{min-height:360px;padding:24px}.summary-card__identity{display:block}.summary-card__label{margin-top:10px;font-size:30px}.summary-card__amount{font-size:42px}.summary-card__amount--state{font-size:34px}.summary-card__foot{font-size:24px}.visibility-button{position:absolute;right:18px;top:18px}.plan-grid{grid-template-columns:1fr}.attention-row,.ledger-row,.sheet-list__item{align-items:flex-start}.attention-row__amount,.ledger-row__end{flex:0 0 auto}.plan-card__amount{white-space:normal}.timeline-row{flex-wrap:wrap}.timeline-row__date{flex-basis:82px}.ai-entry{gap:18px;padding:22px 24px}}
 </style>
