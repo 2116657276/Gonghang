@@ -24,7 +24,7 @@ useLoad(async options => {
 </script>
 
 <template>
-  <PageShell title="调整结果" subtitle="计划变化、订单处理和退款事实分开显示" compact>
+  <PageShell title="调整结果" subtitle="计划变化、订单处理和退款事实分开显示" layout="detail" back>
     <template #hero><button class="back" @tap="Taro.navigateBack()">‹</button></template>
     <StatePanel v-if="!value&&!error" title="正在读取调整结果" />
     <StatePanel v-else-if="error" title="调整结果不可用" :detail="error" tone="error" />

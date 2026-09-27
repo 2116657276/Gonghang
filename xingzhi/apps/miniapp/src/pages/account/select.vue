@@ -26,7 +26,7 @@ async function select(id: string) {
 </script>
 
 <template>
-  <PageShell title="规划账户" subtitle="查看当前可用于资金判断的账户" compact>
+  <PageShell title="规划账户" subtitle="查看当前可用于资金判断的账户" layout="detail" back>
     <template #hero><button class="back" @tap="Taro.navigateBack()">‹</button></template>
     <StatePanel v-if="overview.loading.value" title="正在读取账户" />
     <StatePanel v-else-if="overview.error.value" title="账户暂时不可用" :detail="overview.error.value" tone="error"><button class="secondary-button retry" @tap="overview.load">重新加载</button></StatePanel>

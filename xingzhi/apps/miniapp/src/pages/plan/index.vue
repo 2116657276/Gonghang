@@ -83,7 +83,7 @@ function askAboutItem(view: PlanViewItem) {
 </script>
 
 <template>
-  <PageShell title="我的计划" subtitle="把想做的事，放进可执行的安排里">
+  <PageShell title="我的计划" subtitle="把想做的事，放进可执行的安排里" layout="main">
     <StatePanel v-if="overview.loading.value" title="正在整理计划" detail="计划与已发生账目会分开显示。" />
     <StatePanel v-else-if="overview.error.value" title="计划暂时不可用" :detail="overview.error.value" tone="error"><button class="secondary-button retry" @tap="overview.load">重新加载</button></StatePanel>
     <template v-else>

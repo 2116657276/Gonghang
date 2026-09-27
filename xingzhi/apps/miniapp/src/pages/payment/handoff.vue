@@ -51,7 +51,7 @@ useLoad(options => { orderId.value = options.orderId ?? ''; void load(); });
 </script>
 
 <template>
-  <PageShell title="付款交接" subtitle="付款动作与服务端核验分开完成" compact>
+  <PageShell title="付款交接" subtitle="付款动作与服务端核验分开完成" layout="detail" back>
     <template #hero><button class="back" @tap="Taro.navigateBack()">‹</button></template>
     <StatePanel v-if="loading" title="正在准备付款交接" />
     <StatePanel v-else-if="error&&!handoff" title="付款交接暂时不可用" :detail="error" tone="error"><button class="secondary-button retry" @tap="load">重新尝试</button></StatePanel>

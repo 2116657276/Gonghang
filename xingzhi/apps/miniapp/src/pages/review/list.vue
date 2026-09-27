@@ -12,7 +12,7 @@ useDidShow(() => void overview.load());
 </script>
 
 <template>
-  <PageShell title="月度复盘" subtitle="选择一个周期查看资金与决策证据" compact>
+  <PageShell title="月度复盘" subtitle="选择一个周期查看资金与决策证据" layout="detail" back>
     <template #hero><button class="back" @tap="Taro.navigateBack()">‹</button></template>
     <StatePanel v-if="overview.loading.value" title="正在读取可复盘周期" />
     <StatePanel v-else-if="overview.error.value" title="复盘列表暂时不可用" :detail="overview.error.value" tone="error"><button class="secondary-button retry" @tap="overview.load">重新加载</button></StatePanel>

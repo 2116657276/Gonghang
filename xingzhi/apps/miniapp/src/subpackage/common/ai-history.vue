@@ -50,7 +50,7 @@ useDidShow(() => void load());
 </script>
 
 <template>
-  <PageShell title="AI 历史" subtitle="恢复过去的整理结果与规划草稿" compact>
+  <PageShell title="AI 历史" subtitle="恢复过去的整理结果与规划草稿" layout="detail" back>
     <template #hero><button class="back" @tap="Taro.navigateBack()">‹</button></template>
     <StatePanel v-if="loading" title="正在读取 AI 历史" />
     <StatePanel v-else-if="error&&!items.length" title="AI 历史暂时不可用" :detail="error" tone="error"><button class="secondary-button retry" @tap="load()">重新加载</button></StatePanel>

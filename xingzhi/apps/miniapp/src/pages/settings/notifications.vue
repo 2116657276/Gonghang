@@ -38,7 +38,7 @@ const rows: Array<{ key: keyof Preferences; title: string; detail: string }> = [
 </script>
 
 <template>
-  <PageShell title="应用内提醒" subtitle="管理首页提示摘要的显示偏好" compact>
+  <PageShell title="应用内提醒" subtitle="管理首页提示摘要的显示偏好" layout="detail" back>
     <template #hero><button class="back" @tap="Taro.navigateBack()">‹</button></template>
     <StatePanel v-if="loading" title="正在读取通知偏好" />
     <StatePanel v-else-if="error&&!loaded" title="通知偏好暂时不可用" :detail="error" tone="error"><button class="secondary-button retry" @tap="load">重新加载</button></StatePanel>

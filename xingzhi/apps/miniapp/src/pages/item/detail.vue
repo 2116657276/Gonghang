@@ -66,7 +66,7 @@ function offers() { void Taro.navigateTo({url:`/pages/offers/index?periodId=${pe
 </script>
 
 <template>
-  <PageShell :title="item?.title ?? '计划详情'" subtitle="一个计划的状态、影响与下一步" compact>
+  <PageShell title="计划详情" :subtitle="item?.title ?? '一个计划的状态、影响与下一步'" layout="detail" back>
     <template #hero><button class="back" aria-label="返回" @tap="Taro.navigateBack()">‹</button></template>
     <StatePanel v-if="loading" title="正在读取计划详情" />
     <StatePanel v-else-if="error || !period || !item" title="计划详情暂时不可用" :detail="error || '没有找到对应计划项目。'" tone="error">

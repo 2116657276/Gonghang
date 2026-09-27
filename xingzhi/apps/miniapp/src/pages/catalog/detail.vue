@@ -24,7 +24,7 @@ useLoad(async options => {
 </script>
 
 <template>
-  <PageShell title="候选详情" subtitle="先了解规则，再核对实时报价" compact>
+  <PageShell title="候选详情" subtitle="先了解规则，再核对实时报价" layout="detail" back>
     <template #hero><button class="back" @tap="Taro.navigateBack()">‹</button></template>
     <StatePanel v-if="loading" title="正在读取候选详情"/>
     <StatePanel v-else-if="error||!offer" title="候选详情暂时不可用" :detail="error" tone="error"/>

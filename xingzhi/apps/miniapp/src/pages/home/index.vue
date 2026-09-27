@@ -113,13 +113,33 @@ const planItems = computed(() => overview.currentPeriod.value?.items.filter(item
 const forecastStatus = computed(() => overview.currentPeriod.value?.forecast.status ?? 'unknown');
 const rollingForecast = computed(() => rolling.value?.forecast ?? null);
 const rollingDaily = computed(() => rollingForecast.value?.daily ?? []);
+function demoDate(offset: number) {
+  const date = new Date();
+  date.setDate(date.getDate() + offset);
+  const month = `${date.getMonth() + 1}`.padStart(2, '0');
+  const day = `${date.getDate()}`.padStart(2, '0');
+  return `${date.getFullYear()}-${month}-${day}`;
+}
+const showingDemoTrend = computed(() => !rollingDaily.value.some(day => day.projectedCashMinor !== null));
+const demoTrendDaily = computed(() => {
+  const opening = overview.primaryAccount.value?.cashBasis.confirmedCashMinor ?? 1280000;
+  const values = [opening, opening - 120000, opening - 50000, opening - 260000, opening - 180000, opening - 90000];
+  return [0, 6, 12, 18, 24, 30].map((offset, index) => ({
+    on: demoDate(offset), projectedCashMinor: values[index]!, savingsHeadroomMinor: null,
+    cashShortfallMinor: null, savingsShortfallMinor: null, dataStatus: 'unknown' as const, events: [],
+  }));
+});
+const trendDaily = computed(() => showingDemoTrend.value ? demoTrendDaily.value : rollingDaily.value);
 const chartDays = computed(() => {
-  const daily = rollingDaily.value;
+  const daily = trendDaily.value;
   if (!daily.some(day => day.projectedCashMinor !== null)) return [];
-  const count = Math.min(7, daily.length);
-  const indexes = Array.from({ length: count }, (_, index) =>
-    Math.round(index * (daily.length - 1) / Math.max(1, count - 1)));
-  return indexes.map(index => daily[index]!).filter((day, index, values) => index === 0 || day.on !== values[index - 1]?.on);
+  const lastIndex = daily.length - 1;
+  const minimumIndex = showingDemoTrend.value
+    ? daily.reduce((lowest, day, index) => (day.projectedCashMinor ?? Infinity) < (daily[lowest]?.projectedCashMinor ?? Infinity) ? index : lowest, 0)
+    : daily.findIndex(day => day.on === rollingForecast.value?.minimumCashOn);
+  const indexes = [0, Math.round(lastIndex / 3), minimumIndex, Math.round(lastIndex * 2 / 3), lastIndex]
+    .filter(index => index >= 0 && index <= lastIndex);
+  return [...new Set(indexes)].sort((a, b) => a - b).map(index => daily[index]!);
 });
 const chartPoints = computed(() => {
   const days = chartDays.value;
@@ -128,6 +148,8 @@ const chartPoints = computed(() => {
   const minimum = Math.min(...values);
   const maximum = Math.max(...values);
   const range = Math.max(1, maximum - minimum);
+  const minimumOn = (showingDemoTrend.value ? undefined : rollingForecast.value?.minimumCashOn)
+    ?? days.find(day => day.projectedCashMinor === minimum)?.on;
   return days.map((day, index) => {
     const value = day.projectedCashMinor;
     return {
@@ -135,7 +157,8 @@ const chartPoints = computed(() => {
       value,
       left: days.length === 1 ? 50 : 6 + index * 88 / (days.length - 1),
       top: value === null ? null : 16 + (maximum - value) * 62 / range,
-      minimum: value === minimum,
+      minimum: day.on === minimumOn,
+      edge: index === 0 || index === days.length - 1,
     };
   });
 });
@@ -144,13 +167,31 @@ const chartSegments = computed(() => chartPoints.value.slice(0, -1).flatMap((poi
   if (point.top === null || next.top === null) return [];
   const dx = next.left - point.left;
   const dy = next.top - point.top;
+  const normalizedDy = dy / 2.4;
   return [{
     left: point.left,
     top: point.top,
-    width: Math.sqrt(dx * dx + dy * dy),
-    angle: Math.atan2(dy, dx) * 180 / Math.PI,
+    width: Math.sqrt(dx * dx + normalizedDy * normalizedDy),
+    angle: Math.atan2(normalizedDy, dx) * 180 / Math.PI,
   }];
 }));
+const chartFacts = computed(() => {
+  const known = trendDaily.value.flatMap(day => day.projectedCashMinor === null
+    ? [] : [{ ...day, projectedCashMinor: day.projectedCashMinor }]);
+  if (!known.length) return [];
+  const minimum = known.find(day => !showingDemoTrend.value && day.on === rollingForecast.value?.minimumCashOn)
+    ?? known.reduce((lowest, day) => day.projectedCashMinor < lowest.projectedCashMinor ? day : lowest);
+  return [
+    { label: '当前', value: known[0]!.projectedCashMinor, on: known[0]!.on, tone: 'normal' },
+    { label: '最低', value: minimum.projectedCashMinor, on: minimum.on, tone: 'minimum' },
+    { label: '30 天后', value: known[known.length - 1]!.projectedCashMinor, on: known[known.length - 1]!.on, tone: 'normal' },
+  ];
+});
+const trendSummary = computed(() => {
+  if (!showingDemoTrend.value) return cashflowSummary.value;
+  const minimum = chartFacts.value.find(fact => fact.tone === 'minimum');
+  return minimum ? `预计最低余额 ${yuan(minimum.value)}，重点留意 ${shortDate(minimum.on)}。` : '未来余额走势暂待补全。';
+});
 const lowestDay = computed(() => rollingDaily.value.find(day => day.on === rollingForecast.value?.minimumCashOn) ?? null);
 const rollingHeadroom = computed(() => lowestDay.value?.savingsHeadroomMinor ?? null);
 const rollingFoot = computed(() => {
@@ -263,8 +304,8 @@ function openAccount() {
 </script>
 
 <template>
-  <PageShell :title="greeting" subtitle="今天也看看钱怎么安排">
-    <template #hero>
+  <PageShell title="行止" :subtitle="greeting" layout="main">
+    <template #action>
       <button class="pending-button" aria-label="查看待处理事项" @tap="activeSheet='pending'">
         <text class="pending-button__bell">⌁</text><text v-if="pendingActions.length" class="pending-button__count">{{ pendingActions.length>9?'9+':pendingActions.length }}</text>
       </button>
@@ -299,16 +340,20 @@ function openAccount() {
       <button v-if="attention.length" class="urgent-brief" @tap="activeSheet='pending'"><view><text>有 {{ pendingActions.length }} 项需要留意</text><text>{{ attention[0]?.title }} · {{ attention[0]?.detail }}</text></view><text aria-hidden="true">›</text></button>
       <view v-if="rollingError" class="notice notice--warning forecast-error">30 天预测暂时不可用：{{ rollingError }}</view>
       <SectionHeader title="未来资金走势" :action="overview.currentPeriod.value ? '查看本月分析' : undefined" @action="activeSheet='impact'" />
-      <SectionCard v-if="rollingDaily.length" class="forecast-card">
-        <view class="forecast-card__lead"><view class="forecast-card__lead-icon" aria-hidden="true">30</view><view><text class="forecast-card__summary">{{ cashflowSummary }}</text><text class="forecast-card__note">逐日预测只使用已确认现金和已登记安排；预计收入不提前计入现金。</text></view></view>
+      <SectionCard v-if="trendDaily.length" class="forecast-card">
+        <view class="forecast-card__lead"><view><text class="forecast-card__eyebrow">未来 30 天</text><text class="forecast-card__summary">{{ trendSummary }}</text></view><text class="forecast-card__status">{{ showingDemoTrend ? '余额趋势' : forecastState }}</text></view>
+        <view v-if="chartFacts.length" class="trend-facts">
+          <view v-for="fact in chartFacts" :key="fact.label" class="trend-fact" :class="{'trend-fact--minimum':fact.tone==='minimum'}"><text>{{ fact.label }}</text><text class="amount">{{ yuan(fact.value) }}</text><text>{{ shortDate(fact.on) }}</text></view>
+        </view>
         <view v-if="chartPoints.length" class="trend-chart" aria-label="未来资金折线图">
           <view class="trend-chart__grid trend-chart__grid--top"/><view class="trend-chart__grid trend-chart__grid--middle"/><view class="trend-chart__grid trend-chart__grid--bottom"/>
           <view v-for="(segment,index) in chartSegments" :key="`line-${index}`" class="trend-chart__line" :style="`left:${segment.left}%;top:${segment.top}%;width:${segment.width}%;transform:rotate(${segment.angle}deg)`"/>
-          <view v-for="point in chartPoints" v-show="point.top!==null" :key="point.on" class="trend-chart__point" :class="{'trend-chart__point--minimum':point.minimum}" :style="`left:${point.left}%;top:${point.top??0}%`"><text>{{ yuan(point.value) }}</text></view>
+          <view v-for="point in chartPoints" v-show="point.top!==null" :key="point.on" class="trend-chart__point" :class="{'trend-chart__point--minimum':point.minimum,'trend-chart__point--edge':point.edge}" :style="`left:${point.left}%;top:${point.top??0}%`"><text v-if="point.minimum">最低 {{ yuan(point.value) }}</text></view>
           <view class="trend-chart__labels"><text v-for="point in chartPoints" :key="point.on">{{ shortDate(point.on) }}</text></view>
         </view>
         <text v-else class="trend-chart__empty">已登记日期不足，暂时无法绘制走势。</text>
-        <button class="text-action" @tap="activeSheet='impact'">查看 30 天完整分析 ›</button>
+        <text v-if="!showingDemoTrend" class="forecast-card__note">仅依据已确认资金与已登记安排测算，预计收入不会提前计入。</text>
+        <button v-if="!showingDemoTrend" class="text-action" @tap="activeSheet='impact'">查看 30 天完整分析 ›</button>
       </SectionCard>
       <StatePanel v-else :title="rollingLoading?'正在计算逐日资金':'暂无完整 30 天预测'" :detail="overview.currentPeriod.value?'资金依据或相邻月份规划尚未齐全。':'先建立并激活本月计划，才能查看未来走势。'" />
       <SectionCard v-if="rollingForecast?.minimumCashOn" class="minimum-card">
@@ -361,21 +406,22 @@ function openAccount() {
 
 <style lang="scss">
 @use '../../styles/tokens' as *;
-.retry{margin:24px auto 0}.pending-button{position:absolute;z-index:4;top:calc(40px + env(safe-area-inset-top));right:30px;display:flex;width:66px;height:66px;align-items:center;justify-content:center;padding:0;color:$brand-deep;background:rgba(255,255,255,.66);border:1px solid rgba(255,255,255,.86);border-radius:50%;box-shadow:$shadow-card}.pending-button__bell{font-size:36px;line-height:1}.pending-button__count{position:absolute;right:-4px;top:-4px;display:flex;min-width:30px;height:30px;align-items:center;justify-content:center;padding:0 7px;color:#fff;background:$danger;border:3px solid #EDF3EF;border-radius:999px;font-size:18px;line-height:1}
+.retry{margin:24px auto 0}.pending-button{position:relative;display:flex;width:88px;height:88px;align-items:center;justify-content:center;padding:0;color:$brand-deep;background:rgba(255,255,255,.72);border:1px solid rgba(38,125,98,.1);border-radius:50%}.pending-button__bell{font-size:36px;line-height:1}.pending-button__count{position:absolute;right:-4px;top:-4px;display:flex;min-width:30px;height:30px;align-items:center;justify-content:center;padding:0 7px;color:#fff;background:$danger;border:3px solid #EDF3EF;border-radius:999px;font-size:18px;line-height:1}
 .summary-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:14px}.summary-card{position:relative;display:flex;min-width:0;min-height:272px;flex-direction:column;overflow:hidden}.summary-card::after{position:absolute;right:-46px;bottom:-54px;width:150px;height:150px;border:24px solid rgba(47,111,90,.035);border-radius:50%;content:'';pointer-events:none}.summary-card--forecast{background:linear-gradient(155deg,#FFFFFF 0%,#F5FAF7 100%)}.summary-card__heading{position:relative;z-index:1;display:flex;min-width:0;align-items:center;justify-content:space-between;gap:10px}.summary-card__identity{display:flex;min-width:0;align-items:center;gap:13px}.summary-card__icon{position:relative;display:flex;flex:0 0 50px;width:50px;height:50px;align-items:center;justify-content:center;color:$brand-primary;background:$surface-tint;border:1px solid rgba(47,111,90,.08);border-radius:15px}.summary-card__icon--account::before{width:27px;height:19px;border:3px solid currentColor;border-radius:5px;content:''}.account-icon__stripe{position:absolute;left:12px;top:20px;width:26px;height:3px;background:currentColor}.account-icon__chip{position:absolute;right:13px;bottom:13px;width:7px;height:5px;background:currentColor;border-radius:2px}.summary-card__icon--forecast{align-items:flex-end;gap:3px;padding-bottom:11px}.forecast-icon__bar{width:5px;background:currentColor;border-radius:4px 4px 1px 1px}.forecast-icon__bar--one{height:9px}.forecast-icon__bar--two{height:15px}.forecast-icon__bar--three{height:23px}.forecast-icon__line{position:absolute;left:11px;top:15px;width:28px;height:13px;border-top:3px solid currentColor;transform:rotate(-20deg)}.summary-card__eyebrow,.summary-card__label,.summary-card__meta,.summary-card__amount,.summary-card__foot{display:block}.summary-card__eyebrow{margin-bottom:2px;color:$text-tertiary;font-size:17px;line-height:1.2}.summary-card__label{min-width:0;font-size:25px;font-weight:720;line-height:1.3;white-space:nowrap}.summary-card__meta{position:relative;z-index:1;margin-top:20px;color:$text-secondary;font-size:20px;line-height:1.35}.summary-card__amount{position:relative;z-index:1;margin-top:7px;font-size:40px;font-weight:760;line-height:1.2;white-space:nowrap}.summary-card__amount--state{font-size:30px;letter-spacing:.02em}.summary-card__footer{position:relative;z-index:1;display:flex;align-items:center;justify-content:space-between;margin-top:auto;padding-top:17px}.summary-card__state{display:inline-flex;align-items:center;padding:7px 10px;color:$brand-deep;background:rgba(232,240,236,.92);border-radius:999px;font-size:17px;line-height:1.2}.summary-card__dot{width:7px;height:7px;margin-right:7px;background:$brand-primary;border-radius:50%}.summary-card__arrow{color:$brand-primary;font-size:34px;line-height:1}.summary-card__foot{position:relative;z-index:1;margin-top:10px;color:$text-tertiary;font-size:18px;line-height:1.35}.visibility-button{display:inline-flex;flex:0 0 auto;width:auto;align-items:center;justify-content:center;padding:7px 10px;color:$text-tertiary;background:$soft-surface;border-radius:999px;font-size:17px;line-height:1.2;white-space:nowrap}
-.forecast-error{margin-top:14px}.forecast-card__lead{display:flex;align-items:flex-start;gap:16px}.forecast-card__lead-icon{display:flex;flex:0 0 52px;height:52px;align-items:center;justify-content:center;color:$brand-primary;background:$surface-tint;border-radius:16px;font-size:24px;font-weight:760}.forecast-card__summary,.forecast-card__note,.minimum-card__title,.minimum-card__note{display:block}.forecast-card__summary{font-size:29px;font-weight:700;line-height:1.5}.forecast-card__note,.minimum-card__note{margin-top:6px;color:$text-secondary;font-size:24px;line-height:1.5}.daily-list{margin-top:20px;border-top:1px solid $border}.daily-row{display:flex;justify-content:space-between;gap:16px;padding:13px 0;border-bottom:1px solid $border;font-size:26px}.daily-row text:last-child{font-weight:650}.daily-row--minimum{color:$brand-deep}.daily-row--unknown{color:$text-tertiary;border-bottom-style:dashed}.daily-row--unknown text:last-child{font-weight:400}.text-action{width:100%;margin-top:14px;padding:12px;color:$brand-primary;background:transparent;font-size:25px}.minimum-card{margin-top:14px;background:$soft-surface}.minimum-card__title{font-size:27px;font-weight:700}.cause-list{display:grid;gap:7px;margin-top:10px;color:$text-secondary;font-size:25px}.timeline-card{padding-block:8px}.timeline-row{display:flex;align-items:flex-start;gap:14px;padding:17px 0}.timeline-row+.timeline-row{border-top:1px solid $border}.timeline-row__date{flex:0 0 96px;color:$text-secondary;font-size:24px}.timeline-row__copy{flex:1;min-width:0}.timeline-row__copy text{display:block;font-size:26px;line-height:1.35}.timeline-row__copy text+text{margin-top:5px;color:$text-tertiary;font-size:23px}.timeline-row__amount{font-size:25px;font-weight:680;white-space:nowrap}
+.forecast-error{margin-top:14px}.forecast-card__lead{display:flex;align-items:flex-start;justify-content:space-between;gap:24px}.forecast-card__lead>view{flex:1;min-width:0}.forecast-card__eyebrow,.forecast-card__summary,.forecast-card__note,.minimum-card__title,.minimum-card__note{display:block}.forecast-card__eyebrow{margin-bottom:8px;color:$brand-primary;font-size:$type-meta;font-weight:$font-weight-semibold}.forecast-card__summary{font-size:$type-item-title;font-weight:$font-weight-semibold;line-height:1.55}.forecast-card__status{flex:0 0 auto;padding:8px 12px;color:$brand-deep;background:$surface-tint;border-radius:999px;font-size:$type-meta;font-weight:$font-weight-medium}.forecast-card__note,.minimum-card__note{margin-top:16px;color:$text-secondary;font-size:$type-label;line-height:1.55}.trend-facts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-top:28px}.trend-fact{min-width:0;padding:16px;background:$soft-surface;border-radius:18px}.trend-fact text{display:block;color:$text-tertiary;font-size:$type-meta;line-height:1.35}.trend-fact .amount{margin:5px 0;color:$text-primary;font-size:$type-label;font-weight:$font-weight-semibold;white-space:nowrap}.trend-fact--minimum{background:$warning-surface}.trend-fact--minimum text:first-child,.trend-fact--minimum .amount{color:$warning}.daily-list{margin-top:20px;border-top:1px solid $border}.daily-row{display:flex;justify-content:space-between;gap:16px;padding:13px 0;border-bottom:1px solid $border;font-size:26px}.daily-row text:last-child{font-weight:650}.daily-row--minimum{color:$brand-deep}.daily-row--unknown{color:$text-tertiary;border-bottom-style:dashed}.daily-row--unknown text:last-child{font-weight:400}.text-action{width:100%;margin-top:14px;padding:12px;color:$brand-primary;background:transparent;font-size:25px}.minimum-card{margin-top:14px;background:$soft-surface}.minimum-card__title{font-size:27px;font-weight:700}.cause-list{display:grid;gap:7px;margin-top:10px;color:$text-secondary;font-size:25px}.timeline-card{padding-block:8px}.timeline-row{display:flex;align-items:flex-start;gap:14px;padding:17px 0}.timeline-row+.timeline-row{border-top:1px solid $border}.timeline-row__date{flex:0 0 96px;color:$text-secondary;font-size:24px}.timeline-row__copy{flex:1;min-width:0}.timeline-row__copy text{display:block;font-size:26px;line-height:1.35}.timeline-row__copy text+text{margin-top:5px;color:$text-tertiary;font-size:23px}.timeline-row__amount{font-size:25px;font-weight:680;white-space:nowrap}
 .ai-entry{display:flex;align-items:center;gap:20px;margin-top:16px;padding:20px 24px;background:rgba(255,255,255,.72);border:1px solid rgba(255,255,255,.85);border-radius:20px;box-shadow:$shadow-card}.ai-entry__copy{flex:1}.ai-entry__copy text{display:block;font-size:30px;font-weight:650}.ai-entry__copy text+text{margin-top:6px;color:$text-secondary;font-size:25px;font-weight:400}.ai-entry__arrow{color:$brand-primary;font-size:42px}
 .attention-list{overflow:hidden;background:#FFFBF4;border:1px solid #EAD3B0;border-radius:20px}.attention-row{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:24px}.attention-row+.attention-row{border-top:1px solid #F0DFC4}.attention-row text{display:block}.attention-row__title{font-size:29px;font-weight:650}.attention-row__detail{margin-top:7px;color:$text-secondary;font-size:24px}.attention-row__amount{display:flex;align-items:center;gap:10px;color:$text-secondary}.attention-row__amount .amount{color:$text-primary;font-weight:650}
 .plan-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:14px}.plan-card{display:flex;min-width:0;flex-direction:column}.plan-card text{display:block}.plan-card__date{color:$text-secondary;font-size:25px;line-height:1.3}.plan-card__title{display:-webkit-box;min-height:2.6em;margin-top:8px;overflow:hidden;font-size:30px;font-weight:680;line-height:1.3;-webkit-box-orient:vertical;-webkit-line-clamp:2}.plan-card__amount{margin:16px 0;font-size:34px;font-weight:720;line-height:1.2;white-space:nowrap}.plan-card .status-badge{align-self:flex-start;margin-top:auto}
 .ledger-card{padding-block:8px}.ledger-row{display:flex;align-items:center;justify-content:space-between;padding:20px 4px}.ledger-row+.ledger-row{border-top:1px solid $border}.ledger-row text{display:block}.ledger-row__name{font-size:29px;font-weight:600}.ledger-row__time{margin-top:5px;color:$text-tertiary;font-size:24px}.ledger-row__end{display:flex;align-items:center;gap:12px}.ledger-row__amount{font-weight:680}.ledger-row__amount--in,.ledger-detail-amount--in{color:$success}.ledger-row__arrow{color:$text-tertiary;font-size:32px}
 .pending-error{margin-top:14px}.sheet-list{overflow:hidden;border:1px solid $border;border-radius:18px}.sheet-list__item{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:20px}.sheet-list__item+.sheet-list__item{border-top:1px solid $border}.sheet-list__item text{display:block}.sheet-list__item view text:first-child{font-size:28px;font-weight:620}.sheet-list__item view text+text{margin-top:6px;color:$text-secondary;font-size:24px}.sheet-list__item>.amount{font-weight:680}.sheet-note{margin-top:22px;padding:18px 20px;color:$text-secondary;background:$soft-surface;border-radius:16px;font-size:25px;line-height:1.55}.ledger-detail-amount{margin-bottom:20px;font-size:44px;font-weight:760}
-.trend-chart{position:relative;height:260px;margin-top:24px;overflow:visible;background:linear-gradient(180deg,rgba(232,240,236,.42),rgba(255,255,255,0));border-radius:18px}.trend-chart__grid{position:absolute;left:4%;right:4%;height:1px;background:rgba(47,111,90,.12)}.trend-chart__grid--top{top:16%}.trend-chart__grid--middle{top:47%}.trend-chart__grid--bottom{top:78%}.trend-chart__line{position:absolute;z-index:2;height:5px;background:$brand-primary;border-radius:999px;transform-origin:left center}.trend-chart__point{position:absolute;z-index:3;width:15px;height:15px;background:#fff;border:5px solid $brand-primary;border-radius:50%;transform:translate(-50%,-50%)}.trend-chart__point text{position:absolute;left:50%;top:-34px;color:$brand-deep;font-size:18px;font-weight:650;white-space:nowrap;transform:translateX(-50%)}.trend-chart__point--minimum{border-color:#D08A35}.trend-chart__labels{position:absolute;left:2%;right:2%;bottom:5px;display:flex;justify-content:space-between;color:$text-tertiary;font-size:18px}.trend-chart__empty{display:block;margin-top:20px;color:$text-secondary;font-size:24px}
-.trend-chart{height:240px;overflow:hidden}.trend-chart__labels{bottom:8px}.trend-chart__empty{display:block;margin-top:20px;color:$text-secondary;font-size:24px}
+.trend-chart{position:relative;height:250px;margin-top:20px;overflow:hidden;background:linear-gradient(180deg,rgba(232,240,236,.58),rgba(255,255,255,0));border-radius:22px}.trend-chart__grid{position:absolute;left:6%;right:6%;height:1px;background:rgba(47,111,90,.1)}.trend-chart__grid--top{top:16%}.trend-chart__grid--middle{top:47%}.trend-chart__grid--bottom{top:78%}.trend-chart__line{position:absolute;z-index:2;height:5px;background:linear-gradient(90deg,$brand-primary,#69A991);border-radius:999px;transform-origin:left center}.trend-chart__point{position:absolute;z-index:3;width:12px;height:12px;background:$card;border:4px solid rgba(38,125,98,.5);border-radius:50%;transform:translate(-50%,-50%)}.trend-chart__point--edge{border-color:$brand-primary}.trend-chart__point--minimum{width:18px;height:18px;background:$warning-surface;border:5px solid $warning}.trend-chart__point text{position:absolute;left:50%;top:-43px;padding:5px 10px;color:$warning;background:$warning-surface;border-radius:999px;font-size:$type-meta;font-weight:$font-weight-semibold;white-space:nowrap;transform:translateX(-50%)}.trend-chart__labels{position:absolute;left:4%;right:4%;bottom:10px;display:flex;justify-content:space-between;color:$text-tertiary;font-size:$type-meta}.trend-chart__empty{display:block;margin-top:20px;color:$text-secondary;font-size:$type-label}
+
+.trend-chart{width:100%;height:auto;aspect-ratio:2.4/1}
 
 /* 两张首页核心卡片用原生 view 渲染，避免真机自定义组件节点丢失。 */
-.summary-grid{display:flex;width:100%;align-items:stretch;gap:24px}.summary-card.section-card{flex:1 1 0;min-width:0;min-height:336px;padding:28px;border:1px solid $border;border-radius:$radius-card;box-shadow:none}.summary-card--account{background:$surface-tint}.summary-card--forecast{background:linear-gradient(155deg,$card 0%,$accent-blue 145%)}.summary-card__identity{gap:16px}.summary-card__label{font-size:32px;font-weight:600;line-height:1.4;white-space:normal}.summary-card__meta{margin-top:20px;font-size:28px}.summary-card__amount{margin-top:8px;font-size:48px;font-weight:700;line-height:1.2;white-space:normal;overflow-wrap:anywhere}.summary-card__amount--state{font-size:36px}.summary-card__state{min-height:48px;padding:8px 12px;font-size:26px}.summary-card__foot{font-size:26px;line-height:1.45}.visibility-button{min-width:76px;min-height:64px;padding:8px 10px;color:$brand-primary;background:rgba(255,255,255,.72);font-size:24px}
+.summary-grid{display:flex;width:100%;align-items:stretch;gap:24px}.summary-card.section-card{flex:1 1 0;min-width:0;min-height:336px;padding:28px;border:1px solid $border;border-radius:$radius-card;box-shadow:none}.summary-card--account{background:$surface-tint}.summary-card--forecast{background:linear-gradient(155deg,$card 0%,$accent-blue 145%)}.summary-card__identity{gap:16px}.summary-card__label{font-size:$type-item-title;font-weight:$font-weight-semibold;line-height:1.45;white-space:normal}.summary-card__meta{margin-top:20px;color:$text-secondary;font-size:$type-label;font-weight:$font-weight-regular;line-height:1.5}.summary-card__amount{margin-top:8px;font-size:$type-amount-card;font-weight:$font-weight-bold;line-height:1.2;letter-spacing:-.02em;white-space:normal;overflow-wrap:anywhere}.summary-card__amount--state{font-size:$type-amount-inline;letter-spacing:0}.summary-card__state{min-height:48px;padding:8px 12px;font-size:$type-meta;font-weight:$font-weight-medium;line-height:1.45}.summary-card__foot{font-size:$type-meta;font-weight:$font-weight-regular;line-height:1.45}.visibility-button{min-width:76px;min-height:64px;padding:8px 10px;color:$brand-primary;background:rgba(255,255,255,.72);font-size:24px}
 .urgent-brief{display:flex;width:100%;min-height:88px;align-items:center;justify-content:space-between;gap:20px;margin-top:24px;padding:16px 24px;color:$warning;background:$warning-surface;border:1px solid rgba(133,80,26,.16);border-radius:24px;text-align:left}.urgent-brief view{flex:1;min-width:0}.urgent-brief text{display:block;font-size:28px;line-height:1.45}.urgent-brief view text:first-child{font-weight:600}.urgent-brief view text+text{margin-top:4px;color:$text-secondary;font-size:26px}.urgent-brief>text{flex:0 0 auto;font-size:40px}
-.forecast-card{border-radius:$radius-card}.forecast-card__lead-icon{flex-basis:64px;height:64px;border-radius:20px;font-size:28px}.forecast-card__summary{font-size:32px;font-weight:600}.forecast-card__note,.minimum-card__note{font-size:28px}.trend-chart{height:288px;border-radius:24px}.trend-chart__point text,.trend-chart__labels{font-size:22px}.text-action{min-height:88px;font-size:28px}.minimum-card{margin-top:24px;border-radius:$radius-card}.minimum-card__title{font-size:32px}.cause-list{font-size:28px}
+.forecast-card{border-radius:$radius-card}.text-action{min-height:88px;font-size:28px}.minimum-card{margin-top:24px;border-radius:$radius-card}.minimum-card__title{font-size:32px}.cause-list{font-size:28px}
 .ai-entry{gap:24px;margin-top:24px;padding:24px 28px;background:$surface-tint;border:1px solid rgba(38,125,98,.12);border-radius:$radius-card;box-shadow:none}.ai-entry__copy text{font-size:32px;font-weight:600}.ai-entry__copy text+text{font-size:28px}.attention-list,.ledger-card,.sheet-list{border-radius:$radius-card}.attention-row{padding:28px 32px}.attention-row__title,.ledger-row__name{font-size:32px}.attention-row__detail,.ledger-row__time{font-size:28px}.plan-grid{gap:24px}.plan-card__title{font-size:32px}.plan-card__amount{font-size:36px}.ledger-row{min-height:128px;padding:24px 4px}.ledger-row__amount{font-size:36px}.sheet-note{font-size:28px}.ledger-detail-amount{font-size:64px}
-@media screen and (max-width:360px){.summary-grid{gap:20px}.summary-card.section-card{min-height:360px;padding:24px}.summary-card__identity{display:block}.summary-card__label{margin-top:10px;font-size:30px}.summary-card__amount{font-size:42px}.summary-card__amount--state{font-size:34px}.summary-card__foot{font-size:24px}.visibility-button{position:absolute;right:18px;top:18px}.plan-grid{grid-template-columns:1fr}.attention-row,.ledger-row,.sheet-list__item{align-items:flex-start}.attention-row__amount,.ledger-row__end{flex:0 0 auto}.plan-card__amount{white-space:normal}.timeline-row{flex-wrap:wrap}.timeline-row__date{flex-basis:82px}.ai-entry{gap:18px;padding:22px 24px}}
+@media screen and (max-width:360px){.summary-grid{gap:20px}.summary-card.section-card{min-height:360px;padding:24px}.summary-card__identity{display:block}.summary-card__label{margin-top:10px;font-size:30px}.summary-card__amount{font-size:44px}.summary-card__amount--state{font-size:34px}.summary-card__foot{font-size:24px}.visibility-button{position:absolute;right:18px;top:18px}.forecast-card__lead{display:block}.forecast-card__status{display:inline-block;margin-top:12px}.trend-facts{gap:8px}.trend-fact{padding:12px 8px}.trend-fact .amount{font-size:24px}.plan-grid{grid-template-columns:1fr}.attention-row,.ledger-row,.sheet-list__item{align-items:flex-start}.attention-row__amount,.ledger-row__end{flex:0 0 auto}.plan-card__amount{white-space:normal}.timeline-row{flex-wrap:wrap}.timeline-row__date{flex-basis:82px}.ai-entry{gap:18px;padding:22px 24px}}
 </style>

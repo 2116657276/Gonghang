@@ -15,7 +15,7 @@ const accountName = (id: string) => overview.accounts.value.find(value => value.
 </script>
 
 <template>
-  <PageShell title="历史计划" subtitle="按月份回看预算与计划变化" compact>
+  <PageShell title="历史计划" subtitle="按月份回看预算与计划变化" layout="detail" back>
     <template #hero><button class="back" @tap="Taro.navigateBack()">‹</button></template>
     <StatePanel v-if="overview.loading.value" title="正在读取历史计划" />
     <StatePanel v-else-if="overview.error.value" title="历史计划暂时不可用" :detail="overview.error.value" tone="error"><button class="secondary-button retry" @tap="overview.load">重新加载</button></StatePanel>

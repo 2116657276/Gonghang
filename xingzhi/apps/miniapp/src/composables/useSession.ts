@@ -25,8 +25,12 @@ export function useSession() {
   }
 
   async function signOut() {
-    await api.logout();
-    user.value = null;
+    try {
+      await api.logout();
+    } finally {
+      clearClientSession();
+      user.value = null;
+    }
   }
 
   function forget() {

@@ -43,7 +43,7 @@ useDidShow(() => { if (orderId.value) void load(); });
 </script>
 
 <template>
-  <PageShell title="退款与善后" subtitle="申请、渠道处理和到账分别核对" compact>
+  <PageShell title="退款与善后" subtitle="申请、渠道处理和到账分别核对" layout="detail" back>
     <template #hero><button class="back" @tap="Taro.navigateBack()">‹</button></template>
     <StatePanel v-if="loading" title="正在读取退款事实" />
     <StatePanel v-else-if="error||!value" title="退款详情暂时不可用" :detail="error" tone="error"><button class="secondary-button retry" @tap="load">重新加载</button></StatePanel>

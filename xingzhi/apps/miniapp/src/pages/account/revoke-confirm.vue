@@ -47,7 +47,7 @@ async function revoke() {
 </script>
 
 <template>
-  <PageShell title="撤回账户授权" subtitle="这是高风险操作，请先看清影响" compact>
+  <PageShell title="撤回账户授权" subtitle="这是高风险操作，请先看清影响" layout="detail" back>
     <template #hero><button class="back" aria-label="返回" @tap="Taro.navigateBack()">‹</button></template>
     <StatePanel v-if="loading" title="正在核对账户状态" />
     <StatePanel v-else-if="error && !account" title="无法读取账户" :detail="error" tone="error" />

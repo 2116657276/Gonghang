@@ -18,7 +18,7 @@ function revoke(id: string) { void Taro.navigateTo({ url: `/pages/account/revoke
 </script>
 
 <template>
-  <PageShell title="授权与隐私" subtitle="看清行止可以使用哪些数据" compact>
+  <PageShell title="授权与隐私" subtitle="看清行止可以使用哪些数据" layout="detail" back>
     <template #hero><button class="back" @tap="Taro.navigateBack()">‹</button></template>
     <StatePanel v-if="overview.loading.value" title="正在读取授权范围" />
     <StatePanel v-else-if="overview.error.value" title="授权信息暂时不可用" :detail="overview.error.value" tone="error"><button class="secondary-button retry" @tap="overview.load">重新加载</button></StatePanel>

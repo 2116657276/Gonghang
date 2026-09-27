@@ -5,7 +5,7 @@ page {
   overflow-x: hidden;
   color: $text-primary;
   background: $background;
-  font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  font-family: $font-family-base;
   font-size: 32px;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
@@ -69,12 +69,6 @@ button::after { border: 0; }
 
 /* Taro H5 会为未配置图标的文字型 tabBar 渲染空图片节点。 */
 .weui-tabbar__icon:not([src]) { display: none; }
-
-/* PageShell 提供真机计算后的变量；覆盖各详情页原先只依赖 env() 的定位。 */
-.back,
-.pending-button,
-.ai-history-button,
-.search-button { top: var(--app-action-top, calc(40px + env(safe-area-inset-top))) !important; }
 
 @media screen and (max-width: 360px) {
   .primary-button,

@@ -65,8 +65,7 @@ async function reauthorize() {
 </script>
 
 <template>
-  <PageShell title="账户详情" subtitle="看清行止正在使用的资金依据" compact>
-    <template #hero><button class="back" aria-label="返回" @tap="Taro.navigateBack()">‹</button></template>
+  <PageShell title="账户详情" subtitle="资金依据与使用范围" layout="detail" back>
     <StatePanel v-if="loading" title="正在核对账户事实" detail="余额、流水与未来义务分开读取。" />
     <StatePanel v-else-if="!account" title="账户详情暂时不可用" :detail="error || '没有找到可查看的账户。'" tone="error">
       <button class="secondary-button retry" @tap="load">重新加载</button>
@@ -118,9 +117,9 @@ async function reauthorize() {
 
 <style lang="scss">
 @use '../../styles/tokens' as *;
-.back{position:absolute;z-index:4;top:calc(34px + env(safe-area-inset-top));right:28px;width:64px;height:64px;color:$brand-deep;background:rgba(255,255,255,.72);border-radius:50%;font-size:44px}.retry{margin:20px auto 0}
-.balance-card{background:linear-gradient(145deg,$surface-tint,#fff)}.card-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:24px}.eyebrow,.account-name,.account-source,.balance,.balance-note{display:block}.eyebrow{color:$text-secondary;font-size:28px}.account-name{margin-top:10px;font-size:36px;font-weight:740;line-height:1.35}.account-source{width:max-content;margin-top:14px;padding:7px 14px;color:$brand-deep;background:rgba(38,125,98,.1);border-radius:999px;font-size:24px}.balance{margin-top:36px;font-size:64px;font-weight:800;line-height:1.08}.balance-note{margin-top:14px;color:$text-secondary;font-size:28px;line-height:1.55}
-.reason-list{margin-top:24px;padding:24px 26px;background:$warning-surface;border-radius:24px}.reason-list text{display:block;color:#79562B;font-size:28px;line-height:1.6}.reason-list text:first-child{margin-bottom:8px;font-size:30px;font-weight:700}
-.metric-grid{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-bottom:16px}.metric-grid view{min-width:0;padding:24px;background:$soft-surface;border-radius:24px}.metric-grid text,.metric-grid b{display:block}.metric-grid text{color:$text-secondary;font-size:28px}.metric-grid b{margin-top:12px;font-size:36px;overflow-wrap:anywhere}.amount--in{color:$success}.page-actions{display:grid;gap:16px;margin-top:32px}.page-actions button{width:100%}.danger-action{color:$danger}.boundary{margin-top:24px;font-size:28px;line-height:1.6}
+.retry{margin:20px auto 0}
+.balance-card{background:linear-gradient(145deg,$surface-tint,#fff)}.card-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:24px}.eyebrow,.account-name,.account-source,.balance,.balance-note{display:block}.eyebrow{color:$text-secondary;font-size:$type-label;font-weight:$font-weight-regular;line-height:1.5}.account-name{margin-top:10px;font-size:$type-section-title;font-weight:$font-weight-semibold;line-height:1.4}.account-source{width:max-content;margin-top:14px;padding:7px 14px;color:$brand-deep;background:rgba(38,125,98,.1);border-radius:999px;font-size:24px;font-weight:$font-weight-medium}.balance{margin-top:36px;font-size:$type-amount-display;font-weight:$font-weight-bold;line-height:1.2;letter-spacing:-.02em}.balance-note{margin-top:14px;color:$text-secondary;font-size:$type-label;font-weight:$font-weight-regular;line-height:1.55}
+.reason-list{margin-top:24px;padding:24px 26px;background:$warning-surface;border-radius:24px}.reason-list text{display:block;color:#79562B;font-size:$type-label;font-weight:$font-weight-regular;line-height:1.6}.reason-list text:first-child{margin-bottom:8px;font-size:$type-item-title;font-weight:$font-weight-semibold}
+.metric-grid{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-bottom:16px}.metric-grid view{min-width:0;padding:24px;background:$soft-surface;border-radius:24px}.metric-grid text,.metric-grid b{display:block}.metric-grid text{color:$text-secondary;font-size:$type-label;font-weight:$font-weight-regular}.metric-grid b{margin-top:12px;font-size:$type-amount-inline;font-weight:$font-weight-semibold;line-height:1.3;overflow-wrap:anywhere}.amount--in{color:$success}.page-actions{display:grid;gap:16px;margin-top:32px}.page-actions button{width:100%}.danger-action{color:$danger}.boundary{margin-top:24px;font-size:$type-label;line-height:1.6}
 @media screen and (max-width:360px){.card-heading{align-items:flex-start}.balance{font-size:56px}.metric-grid{grid-template-columns:1fr}.page-actions{gap:12px}}
 </style>

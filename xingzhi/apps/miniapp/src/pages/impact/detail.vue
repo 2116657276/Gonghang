@@ -71,7 +71,7 @@ useLoad(async (options) => {
 </script>
 
 <template>
-  <PageShell title="资金影响" :subtitle="item ? `正在查看：${item.title}` : '把复杂结果拆成可以核对的事实'" compact>
+  <PageShell title="资金影响" :subtitle="item ? `正在查看：${item.title}` : '把复杂结果拆成可以核对的事实'" layout="detail" back>
     <template #hero><button class="back" aria-label="返回" @tap="Taro.navigateBack()">‹</button></template>
     <StatePanel v-if="loading" title="正在计算当前资金影响" />
     <StatePanel v-else-if="error || !period" title="资金影响暂时不可用" :detail="error || '没有找到对应计划。'" tone="error" />

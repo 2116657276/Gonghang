@@ -54,7 +54,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <PageShell title="处理进度" subtitle="只展示服务端已经确认的状态" compact>
+  <PageShell title="处理进度" subtitle="只展示服务端已经确认的状态" layout="detail" back>
     <template #hero><button class="back" @tap="Taro.navigateBack()">‹</button></template>
     <StatePanel v-if="!operation && !error" title="正在核对处理结果" />
     <StatePanel v-else-if="error" title="暂时无法读取进度" :detail="error" tone="error">

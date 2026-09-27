@@ -49,7 +49,7 @@ useLoad(async options => {
 </script>
 
 <template>
-  <PageShell title="月度复盘" subtitle="计划、订单和到账证据按事实回看" compact>
+  <PageShell title="月度复盘" subtitle="计划、订单和到账证据按事实回看" layout="detail" back>
     <template #hero><button class="back" @tap="Taro.navigateBack()">‹</button></template>
     <StatePanel v-if="!review&&!error" title="正在生成复盘"/>
     <StatePanel v-else-if="error" title="复盘暂时不可用" :detail="error" tone="error"/>

@@ -13,7 +13,7 @@ useDidShow(() => void overview.load());
 </script>
 
 <template>
-  <PageShell title="个人资料" subtitle="当前登录身份与数据范围" compact>
+  <PageShell title="个人资料" subtitle="当前登录身份与数据范围" layout="detail" back>
     <template #hero><button class="back" @tap="Taro.navigateBack()">‹</button></template>
     <StatePanel v-if="overview.loading.value" title="正在读取个人资料" />
     <StatePanel v-else-if="overview.error.value" title="个人资料暂时不可用" :detail="overview.error.value" tone="error"><button class="secondary-button retry" @tap="overview.load">重新加载</button></StatePanel>

@@ -60,7 +60,7 @@ function secondary() {
 .sheet--above-tabbar{padding-bottom:calc(60PX + env(safe-area-inset-bottom))}
 .sheet__handle{width:72px;height:8px;margin:0 auto 24px;background:#C7D5CD;border-radius:999px}
 .sheet__heading{display:flex;align-items:flex-start;justify-content:space-between;gap:22px}.sheet__heading>view{flex:1;min-width:0}
-.sheet__title,.sheet__description{display:block}.sheet__title{color:$brand-deep;font-size:40px;font-weight:700;line-height:1.35}.sheet__description{margin-top:12px;color:$text-secondary;font-size:28px;line-height:1.55}
+.sheet__title,.sheet__description{display:block}.sheet__title{color:$brand-deep;font-size:$type-sheet-title;font-weight:$font-weight-bold;line-height:1.35}.sheet__description{margin-top:12px;color:$text-secondary;font-size:$type-label;font-weight:$font-weight-regular;line-height:1.55}
 .sheet__close{display:flex;flex:0 0 88px;width:88px;height:88px;align-items:center;justify-content:center;color:$text-secondary;background:$soft-surface;border-radius:50%;font-size:44px;line-height:1}
 .sheet__body{max-height:43vh;margin-top:24px}.sheet__actions{display:flex;gap:16px;margin-top:24px}.sheet__actions .secondary-button{flex:1}.sheet__actions .primary-button{flex:1.35}
 .sheet--expanded{max-height:88vh}.sheet--expanded .sheet__body{max-height:62vh}

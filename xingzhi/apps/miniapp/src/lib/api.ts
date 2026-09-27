@@ -74,8 +74,13 @@ export const api = {
     return { user: result.data.user };
   },
   logout: async () => {
-    await request<void>('/session', { method: 'DELETE', idempotent: false });
-    clearClientSession();
+    try {
+      await request<void>('/session', { method: 'DELETE', idempotent: false, redirectOnUnauthorized: false });
+    } finally {
+      // 退出是用户的本地安全操作。即使服务端暂时不可达，也不能把
+      // bearer token 和待提交内容继续留在设备上。
+      clearClientSession();
+    }
   },
   accounts: () => request<ApiEnvelope<{ accounts: import('./types').FinanceAccountFacts[] }>>('/finance/accounts'),
   preferences: () => request<ApiEnvelope<ConsumerPreferences>>('/consumer-preferences'),
@@ -169,4 +174,6 @@ export const api = {
   }),
 };
 
-export function goLogin() { Taro.reLaunch({ url: '/pages/login/index' }); }
+export async function goLogin() {
+  await Taro.reLaunch({ url: '/pages/login/index' });
+}

@@ -4,7 +4,7 @@ const props=withDefaults(defineProps<{ label:string; tone?:'success'|'warning'|'
 <template><text class="status-badge" :class="`status-badge--${props.tone}`">{{ label }}</text></template>
 <style lang="scss">
 @use '../styles/tokens' as *;
-.status-badge { display:inline-flex; min-height:56px; align-items:center; justify-content:center; padding:8px 16px; border-radius:999px; font-size:28px; font-weight:500; line-height:1.35; white-space:normal; text-align:center; }
+.status-badge { display:inline-flex; min-height:56px; align-items:center; justify-content:center; padding:8px 16px; border-radius:999px; font-size:$type-label; font-weight:$font-weight-medium; line-height:1.35; white-space:normal; text-align:center; }
 .status-badge--success { color:$success; background:$success-surface; }
 .status-badge--warning { color:$warning; background:$warning-surface; }
 .status-badge--info { color:$info; background:$info-surface; }

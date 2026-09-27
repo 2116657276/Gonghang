@@ -25,7 +25,7 @@ function openEnvironment() { void Taro.redirectTo({ url: '/pages/settings/about?
 </script>
 
 <template>
-  <PageShell :title="environmentFirst?'运行环境':'关于行止'" subtitle="青年生活目标金融助手" compact>
+  <PageShell :title="environmentFirst?'运行环境':'关于行止'" subtitle="青年生活目标金融助手" layout="detail" back>
     <template #hero><button class="back" @tap="Taro.navigateBack()">‹</button></template>
     <template v-if="!environmentFirst">
       <SectionCard class="brand"><IpAvatar size="large"/><text class="name">行止</text><text class="slogan">让每一段想去的路，都走得更踏实。</text></SectionCard>
