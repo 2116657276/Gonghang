@@ -98,7 +98,7 @@ Simulation 由本地 Worker/受控结果完成；Sandbox 付款可能返回官�
 
 ## 7. 数据库迁移与接手核对
 
-当前仓库包含 `001_s1_base.sql` 至 `035_budget_ledger_links.sql`，最新编号为 035。迁移脚本按文件名顺序读取，并在目标数据库的 `schema_migrations` 中记录已经应用的文件。
+当前仓库包含 `001_s1_base.sql` 至 `036_revoked_period_recovery_version.sql`，最新编号为 036。迁移脚本按文件名顺序读取，并在目标数据库的 `schema_migrations` 中记录已经应用的文件。
 
 这只说明仓库有这些迁移，不说明当前机器或目标数据库已经执行。接手时应单独核对目标数据库的迁移登记，再决定是否运行迁移；不能为了让文档数字一致而手工改表，也不能重写已经应用的 SQL。新变更只追加更大的编号。
 

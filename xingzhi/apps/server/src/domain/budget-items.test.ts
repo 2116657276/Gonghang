@@ -1,14 +1,18 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { test } from 'node:test';
+import { after, test } from 'node:test';
 import Fastify from 'fastify';
 import type { PoolClient } from 'pg';
 import type { BudgetItemMutationResult } from '@xingzhi/contracts';
 import { config } from '../config.js';
-import { pool, closePool } from '../db/client.js';
-import { seedConsumerCatalog } from '../db/consumer-catalog.js';
+import { createIsolatedTestDatabase } from '../db/isolated-test-database.js';
 import type { BudgetItemPort } from './budget-port.js';
-import { registerBudgetItemApi } from '../routes/budget-items.js';
+
+const database = await createIsolatedTestDatabase();
+const { pool } = database;
+after(() => database.close());
+const { seedConsumerCatalog } = await import('../db/consumer-catalog.js');
+const { registerBudgetItemApi } = await import('../routes/budget-items.js');
 
 test('B01 consumer item routes preserve transaction, ownership and idempotency boundaries', async () => {
   const client = await pool.connect();
@@ -123,6 +127,5 @@ test('B01 consumer item routes preserve transaction, ownership and idempotency b
     await app.close();
     await client.query('ROLLBACK');
     client.release();
-    await closePool();
   }
 });

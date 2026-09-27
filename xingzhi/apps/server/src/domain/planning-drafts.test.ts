@@ -1,15 +1,19 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { test } from 'node:test';
+import { after, test } from 'node:test';
 import Fastify from 'fastify';
 import type { PoolClient } from 'pg';
 import { config } from '../config.js';
-import { pool, closePool } from '../db/client.js';
-import { seedConsumerCatalog } from '../db/consumer-catalog.js';
-import { consumerPlanningAgentTools, consumerPlanningToolNames } from './consumer-planning-tools.js';
-import { constrainAgentDraftToMessage } from './consumer-agent-runtime.js';
+import { createIsolatedTestDatabase } from '../db/isolated-test-database.js';
 import type { PlanningDraftPort } from './planning-draft-port.js';
-import { registerPlanningDraftApi } from '../routes/planning-drafts.js';
+
+const database = await createIsolatedTestDatabase();
+const { pool } = database;
+after(() => database.close());
+const { seedConsumerCatalog } = await import('../db/consumer-catalog.js');
+const { consumerPlanningAgentTools, consumerPlanningToolNames } = await import('./consumer-planning-tools.js');
+const { constrainAgentDraftToMessage } = await import('./consumer-agent-runtime.js');
+const { registerPlanningDraftApi } = await import('../routes/planning-drafts.js');
 
 test('B02 planning drafts keep demand, budget and Agent execution boundaries separate', async () => {
   const client = await pool.connect();
@@ -214,6 +218,5 @@ test('B02 planning drafts keep demand, budget and Agent execution boundaries sep
     await app.close();
     await client.query('ROLLBACK');
     client.release();
-    await closePool();
   }
 });

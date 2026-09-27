@@ -1,18 +1,22 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { test } from 'node:test';
+import { after, test } from 'node:test';
 import Fastify from 'fastify';
 import type { PoolClient } from 'pg';
 import { config } from '../config.js';
-import { pool, closePool } from '../db/client.js';
-import { seedConsumerFinanceDemo } from '../db/consumer-finance-demo.js';
-import { registerBudgetPeriodReviewApi } from '../routes/budget-period-review.js';
-import { assessPurchasePreview } from './purchase-assessment.js';
-import { commitPurchaseAssessment } from './purchase-commit.js';
-import { applyVerifiedMoneyEvent } from './verified-money-event.js';
-import { reviewBudgetPeriod } from './budget-period-review.js';
-import { forecastBudgetCashflow } from './budget-cashflow.js';
-import { loadFinanceAccountFacts } from './finance-facts.js';
+import { createIsolatedTestDatabase } from '../db/isolated-test-database.js';
+
+const database = await createIsolatedTestDatabase();
+const { pool } = database;
+after(() => database.close());
+const { seedConsumerFinanceDemo } = await import('../db/consumer-finance-demo.js');
+const { registerBudgetPeriodReviewApi } = await import('../routes/budget-period-review.js');
+const { assessPurchasePreview } = await import('./purchase-assessment.js');
+const { commitPurchaseAssessment } = await import('./purchase-commit.js');
+const { applyVerifiedMoneyEvent } = await import('./verified-money-event.js');
+const { reviewBudgetPeriod } = await import('./budget-period-review.js');
+const { forecastBudgetCashflow } = await import('./budget-cashflow.js');
+const { loadFinanceAccountFacts } = await import('./finance-facts.js');
 
 test('A06 distinguishes provider results from verified account postings and reviews late settlement', async () => {
   const client = await pool.connect();
@@ -21,6 +25,7 @@ test('A06 distinguishes provider results from verified account postings and revi
     await client.query('BEGIN');
     const now = new Date();
     const fixture = await seedConsumerFinanceDemo(client, now);
+    const initialReview = await reviewBudgetPeriod(client, fixture.ownerId, fixture.periodId, now);
     const merchantId = (await client.query<{ id: string }>(
       "SELECT id FROM users WHERE role='merchant_admin' ORDER BY id LIMIT 1",
     )).rows[0]!.id;
@@ -136,7 +141,8 @@ test('A06 distinguishes provider results from verified account postings and revi
     (error: { code?: string }) => error.code === 'IDEMPOTENCY_CONFLICT');
     const afterPayment = await reviewBudgetPeriod(client, fixture.ownerId, fixture.periodId, checkedAt);
     assert.equal(afterPayment.confirmedOrderPaymentsMinor, 9900);
-    assert.equal(afterPayment.confirmedPeriodOutflowMinor, 9900);
+    assert.equal(afterPayment.confirmedPeriodOutflowMinor,
+      initialReview.confirmedPeriodOutflowMinor + 9900);
     assert.equal(afterPayment.currentConfirmedCashMinor, 190100);
     const afterForecast = await forecastBudgetCashflow(client, fixture.ownerId, fixture.periodId,
       { now: checkedAt });
@@ -154,6 +160,8 @@ test('A06 distinguishes provider results from verified account postings and revi
     assert.equal(beforeRefund.refundAwaitingArrivalMinor, 3000);
     assert.equal(beforeRefund.confirmedRefundReceivedMinor, 0);
     assert.equal(beforeRefund.currentConfirmedCashMinor, 190100);
+    assert.equal(beforeRefund.confirmedPeriodOutflowMinor,
+      afterPayment.confirmedPeriodOutflowMinor);
     const refundId = randomUUID();
     const refundAt = new Date(now.getTime() + 3000);
     const refundCheckedAt = new Date(now.getTime() + 4000);
@@ -342,6 +350,5 @@ test('A06 distinguishes provider results from verified account postings and revi
     await app.close();
     await client.query('ROLLBACK');
     client.release();
-    await closePool();
   }
 });

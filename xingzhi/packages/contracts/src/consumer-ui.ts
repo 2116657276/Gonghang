@@ -74,6 +74,7 @@ export type RollingCashflow = {
 };
 export type BudgetItemImpact = {
   periodId: string; itemId: string; financialVersion: number; periodVersion: number;
+  estimatedMinor: number; coveredMinor: number; remainingMinor: number;
   withItem: BudgetPeriod['forecast']; withoutItem: BudgetPeriod['forecast'];
 };
 export type BudgetItemChangePreview = {

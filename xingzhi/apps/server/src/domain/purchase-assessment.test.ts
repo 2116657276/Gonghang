@@ -1,16 +1,20 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { test } from 'node:test';
+import { after, test } from 'node:test';
 import Fastify from 'fastify';
 import type { PoolClient } from 'pg';
 import { config } from '../config.js';
-import { pool, closePool } from '../db/client.js';
-import { seedConsumerFinanceDemo } from '../db/consumer-finance-demo.js';
-import { registerFinanceAssessmentApi } from '../routes/finance-assessments.js';
-import { buildCashflowEvents, forecastBudgetCashflow } from './budget-cashflow.js';
-import { commitPurchaseAssessment } from './purchase-commit.js';
-import { assessAdjustmentOption, assessPurchasePreview, assessUnexpectedSpend } from './purchase-assessment.js';
-import { createConfirmedOrder } from './business-actions.js';
+import { createIsolatedTestDatabase } from '../db/isolated-test-database.js';
+
+const database = await createIsolatedTestDatabase();
+const { pool } = database;
+after(() => database.close());
+const { seedConsumerFinanceDemo } = await import('../db/consumer-finance-demo.js');
+const { registerFinanceAssessmentApi } = await import('../routes/finance-assessments.js');
+const { buildCashflowEvents, forecastBudgetCashflow } = await import('./budget-cashflow.js');
+const { commitPurchaseAssessment } = await import('./purchase-commit.js');
+const { assessAdjustmentOption, assessPurchasePreview, assessUnexpectedSpend } = await import('./purchase-assessment.js');
+const { createConfirmedOrder } = await import('./business-actions.js');
 
 test('A04 previews immutable actual quote; A05 rechecks and commits one pending order atomically', async () => {
   const client = await pool.connect();
@@ -193,6 +197,5 @@ test('A04 previews immutable actual quote; A05 rechecks and commits one pending 
     await app.close();
     await client.query('ROLLBACK');
     client.release();
-    await closePool();
   }
 });

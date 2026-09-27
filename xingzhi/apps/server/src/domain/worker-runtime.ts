@@ -1,3 +1,4 @@
+import { finishClosedOrderBudget } from './closed-order-budget.js';
 import { processChannelJob } from './channel-worker.js';
 import { config } from '../config.js';
 import type { PoolClient } from 'pg';
@@ -163,6 +164,7 @@ async function processClose(client: PoolClient, job: ClaimedJob) {
     }
     await client.query("UPDATE orders SET payment_status = 'closed', status = 'cancelled', reserved_minor = 0, updated_at = now() WHERE id = $1", [order.id]);
     await client.query("UPDATE payment_attempts SET status = 'closed', observed_at = now() WHERE order_id = $1", [order.id]);
+    await finishClosedOrderBudget(client, job.owner_id, order.id);
     return { state: 'succeeded' as const, result: { source: 'simulation', paymentStatus: 'closed' }, eventType: 'simulation.close_confirmed' };
   })();
   return completeJob(client, job, outcome.state, outcome.result, outcome.eventType);

@@ -61,4 +61,5 @@ tmp/
 *.tmp.ts
 
 # 微信开发者工具本机配置
+xingzhi/apps/miniapp/project.config.json
 project.private.config.json

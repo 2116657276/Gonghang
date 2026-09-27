@@ -10,9 +10,10 @@
     "db:seed": "tsx src/db/seed.ts",
     "db:seed:consumer-catalog": "tsx src/db/seed-consumer-catalog.ts",
     "db:seed:consumer-finance": "tsx src/db/seed-consumer-finance.ts",
+    "db:seed:consumer-september-demo": "tsx src/db/seed-consumer-september-demo.ts",
     "db:seed:consumer-scenario": "tsx src/db/seed-consumer-scenario.ts",
     "typecheck": "tsc --noEmit",
-    "test:targeted": "node --test --import tsx src/domain/*.test.ts src/payment/*.test.ts",
+    "test:targeted": "node --test --test-concurrency=1 --import tsx src/domain/*.test.ts src/payment/*.test.ts",
     "build": "tsc",
     "agent:smoke": "tsx src/agent-smoke.ts"
   },

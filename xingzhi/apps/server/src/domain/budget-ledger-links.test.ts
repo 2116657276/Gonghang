@@ -1,11 +1,15 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { test } from 'node:test';
-import { pool, closePool } from '../db/client.js';
-import { seedConsumerFinanceDemo } from '../db/consumer-finance-demo.js';
-import { forecastBudgetCashflow } from './budget-cashflow.js';
-import { readBudgetLedgerLinks, linkBudgetLedgerEntry, unlinkBudgetLedgerEntry } from './budget-ledger-links.js';
-import { reviewBudgetPeriod } from './budget-period-review.js';
+import { after, test } from 'node:test';
+import { createIsolatedTestDatabase } from '../db/isolated-test-database.js';
+
+const database = await createIsolatedTestDatabase();
+const { pool } = database;
+after(() => database.close());
+const { seedConsumerFinanceDemo } = await import('../db/consumer-finance-demo.js');
+const { forecastBudgetCashflow } = await import('./budget-cashflow.js');
+const { readBudgetLedgerLinks, linkBudgetLedgerEntry, unlinkBudgetLedgerEntry } = await import('./budget-ledger-links.js');
+const { reviewBudgetPeriod } = await import('./budget-period-review.js');
 
 test('F3.3 links posted expense once, releases only remaining plan and preserves unlink history', async () => {
   const client = await pool.connect();
@@ -19,6 +23,8 @@ test('F3.3 links posted expense once, releases only remaining plan and preserves
     // Keep the review instant after both the posting and this test's new links.
     const now = new Date(Math.max(Date.now() + 5000, snapshot.asOf.getTime() + 3000));
     const before = await forecastBudgetCashflow(client, fixture.ownerId, fixture.periodId, { now });
+    const baseline = await reviewBudgetPeriod(client, fixture.ownerId, fixture.periodId, now);
+    assert.equal(baseline.linkedActualExpenseMinor, 0);
     const entryId = randomUUID();
     const postedAt = new Date(snapshot.asOf.getTime() + 1000);
     await client.query(`INSERT INTO finance_ledger_entries
@@ -42,7 +48,7 @@ test('F3.3 links posted expense once, releases only remaining plan and preserves
     assert.equal(after.forecast.minimumSavingsHeadroomMinor, before.forecast.minimumSavingsHeadroomMinor);
     const review = await reviewBudgetPeriod(client, fixture.ownerId, fixture.periodId, now);
     assert.equal(review.linkedActualExpenseMinor, 2500);
-    assert.equal(review.unlinkedPostedExpenseMinor, 0);
+    assert.equal(review.unlinkedPostedExpenseMinor, baseline.unlinkedPostedExpenseMinor);
     const secondEntryId = randomUUID();
     await client.query(`INSERT INTO finance_ledger_entries
       (id,owner_id,account_id,source,direction,amount_minor,occurred_at,posted_at,
@@ -62,7 +68,7 @@ test('F3.3 links posted expense once, releases only remaining plan and preserves
     assert.equal(twiceCovered.items.find((item) => item.itemId === fixture.dinnerItemId)?.remainingMinor, 0);
     const partialReview = await reviewBudgetPeriod(client, fixture.ownerId, fixture.periodId, now);
     assert.equal(partialReview.linkedActualExpenseMinor, 8000);
-    assert.equal(partialReview.unlinkedPostedExpenseMinor, 1500);
+    assert.equal(partialReview.unlinkedPostedExpenseMinor, baseline.unlinkedPostedExpenseMinor + 1500);
     await assert.rejects(readBudgetLedgerLinks(client, randomUUID(), fixture.periodId),
       (error: { code?: string }) => error.code === 'RESOURCE_FORBIDDEN');
     const unlinked = await unlinkBudgetLedgerEntry(client, fixture.ownerId, fixture.periodId,
@@ -109,6 +115,5 @@ test('F3.3 links posted expense once, releases only remaining plan and preserves
   } finally {
     await client.query('ROLLBACK');
     client.release();
-    await closePool();
   }
 });

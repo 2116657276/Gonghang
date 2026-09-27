@@ -1,11 +1,15 @@
-import { test } from 'node:test';
+import { after, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import Fastify from 'fastify';
-import { pool, closePool } from '../db/client.js';
-import { seedConsumerCatalog } from '../db/consumer-catalog.js';
-import { registerOfferApi } from '../routes/offers.js';
+import { createIsolatedTestDatabase } from '../db/isolated-test-database.js';
 import { budgetItemCancelInput, consumerApiError } from '@xingzhi/contracts';
+
+const database = await createIsolatedTestDatabase();
+const { pool } = database;
+after(() => database.close());
+const { seedConsumerCatalog } = await import('../db/consumer-catalog.js');
+const { registerOfferApi } = await import('../routes/offers.js');
 
 test('B00 catalog/quote boundaries and repeatable initialization', async () => {
   const client = await pool.connect();
@@ -58,6 +62,5 @@ test('B00 catalog/quote boundaries and repeatable initialization', async () => {
     await app.close();
     await client.query('ROLLBACK');
     client.release();
-    await closePool();
   }
 });

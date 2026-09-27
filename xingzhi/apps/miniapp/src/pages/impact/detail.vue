@@ -18,6 +18,7 @@ const period = ref<BudgetPeriod | null>(null);
 const itemImpact = ref<BudgetItemImpact | null>(null);
 const loading = ref(true);
 const error = ref('');
+const impactError = ref('');
 
 const item = computed<BudgetItem | null>(() => period.value?.items.find(value => value.itemId === itemId.value) ?? null);
 const status = computed(() => period.value?.forecast.status ?? 'unknown');
@@ -55,12 +56,14 @@ useLoad(async (options) => {
   try {
     period.value = (await api.period(periodId.value)).data;
     if (item.value?.status === 'planned') {
+      try {
       const preview = (await api.budgetItemImpact(periodId.value, itemId.value)).data;
       if (preview.financialVersion !== period.value.basis.financialVersion
         || preview.periodVersion !== period.value.basis.periodVersion) {
         throw new Error('资金或计划依据已经变化，请返回后重新查看。');
       }
       itemImpact.value = preview;
+      } catch (reason) { impactError.value = errorMessage(reason); }
     }
   } catch (reason) {
     error.value = errorMessage(reason);
@@ -76,6 +79,7 @@ useLoad(async (options) => {
     <StatePanel v-if="loading" title="正在计算当前资金影响" />
     <StatePanel v-else-if="error || !period" title="资金影响暂时不可用" :detail="error || '没有找到对应计划。'" tone="error" />
     <template v-else>
+      <view v-if="impactError" class="notice notice--warning">单项比较暂时不可用：{{impactError}}。以下保留已读取的周期依据。</view>
       <SectionCard class="result-card" :class="`result-card--${status}`">
         <view class="result-heading"><view><text class="eyebrow">当前结论</text><text class="result-title">{{statusCopy.title}}</text></view><StatusBadge :label="fundingLabel(status)" :tone="statusCopy.tone"/></view>
         <text class="result-detail">{{statusCopy.detail}}</text>
@@ -91,7 +95,8 @@ useLoad(async (options) => {
         <FactRow label="保留目标" :value="yuan(period.basis.savingsTargetMinor)"/>
         <FactRow label="关键日期" :value="shortDate(period.basis.minimumCashOn)"/>
         <FactRow v-if="item" label="当前计划" :value="`${item.title} · ${yuan(item.userEstimatedAmountMinor)}`"/>
-        <FactRow v-if="item" label="该项对最低余量的影响" :value="itemHeadroomImpact===null?'依据不足':yuan(itemHeadroomImpact)"/>
+        <template v-if="itemImpact && item?.kind!=='expected_income'"><FactRow label="原计划金额" :value="yuan(itemImpact.estimatedMinor)"/><FactRow label="已由流水覆盖" :value="yuan(itemImpact.coveredMinor)"/><FactRow label="剩余计划金额" :value="yuan(itemImpact.remainingMinor)"/></template>
+        <FactRow v-if="item" label="剩余计划对最低余量的影响" :value="itemHeadroomImpact===null?'依据不足':yuan(itemHeadroomImpact)"/>
         <view v-if="minimumDay?.events.length" class="date-list"><text>最低日资金事项</text><text v-for="event in minimumDay.events" :key="`${event.kind}-${event.referenceId}`">{{eventLabel(event.kind)}} {{event.deltaMinor>0?'+':''}}{{yuan(event.deltaMinor)}}</text></view>
         <view v-if="period.forecast.affectedDates.length" class="date-list"><text>其他受影响日期</text><text>{{period.forecast.affectedDates.map(shortDate).join('、')}}</text></view>
       </SectionCard>
@@ -114,7 +119,7 @@ useLoad(async (options) => {
         <button v-if="item" class="primary-button" @tap="Taro.navigateTo({url:`/pages/item/detail?periodId=${periodId}&itemId=${itemId}`})">返回计划详情</button>
         <button class="secondary-button" @tap="Taro.switchTab({url:'/pages/ai/index'})">问问行止如何调整</button>
       </view>
-      <view class="notice notice--info boundary">周期结论反映本月全部安排；单项影响比较同一资金依据下包含和移除该未承诺项目的结果。本页不会修改计划或执行资金动作。</view>
+      <view class="notice notice--info boundary">周期结论反映本月全部安排；单项影响只比较剩余计划金额；已入账流水及现金余额保持不变。已有流水关联的项目仍不能直接修改或取消。本页不会修改计划或执行资金动作。</view>
     </template>
   </PageShell>
 </template>

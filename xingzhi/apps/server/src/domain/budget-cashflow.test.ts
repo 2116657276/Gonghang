@@ -1,15 +1,19 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { test } from 'node:test';
+import { after, test } from 'node:test';
 import Fastify from 'fastify';
 import type { PoolClient } from 'pg';
 import { config } from '../config.js';
-import { pool, closePool } from '../db/client.js';
-import { seedConsumerFinanceDemo } from '../db/consumer-finance-demo.js';
-import { registerPlanningDraftApi } from '../routes/planning-drafts.js';
-import { loadFinanceAccountFacts } from './finance-facts.js';
-import { forecastBudgetCashflow, previewBudgetItemChange, previewBudgetItemImpact } from './budget-cashflow.js';
-import { budgetPlanningDraftPort } from './budget-planning-draft-port.js';
+import { createIsolatedTestDatabase } from '../db/isolated-test-database.js';
+
+const database = await createIsolatedTestDatabase();
+const { pool } = database;
+after(() => database.close());
+const { seedConsumerFinanceDemo } = await import('../db/consumer-finance-demo.js');
+const { registerPlanningDraftApi } = await import('../routes/planning-drafts.js');
+const { loadFinanceAccountFacts } = await import('./finance-facts.js');
+const { forecastBudgetCashflow, previewBudgetItemChange, previewBudgetItemImpact } = await import('./budget-cashflow.js');
+const { budgetPlanningDraftPort } = await import('./budget-planning-draft-port.js');
 
 test('A03 reads one owned period, evaluates B02 drafts and never writes budget/order facts', async () => {
   const client = await pool.connect();
@@ -80,6 +84,14 @@ test('A03 reads one owned period, evaluates B02 drafts and never writes budget/o
     const emptyProfile = await forecastBudgetCashflow(client, fixture.ownerId, emptyPeriodId, { now });
     assert.equal(emptyProfile.forecast.status, 'unknown');
     assert.ok(emptyProfile.forecast.reasonCodes.includes('BUDGET_NECESSITIES_UNCONFIRMED'));
+    await client.query('UPDATE budget_periods SET necessities_confirmed_at=$1 WHERE id=$2',
+      [now, emptyPeriodId]);
+    const uncovered = await forecastBudgetCashflow(client, fixture.ownerId, emptyPeriodId,
+      { rolling30: true, now });
+    if (uncovered.forecast.daily.at(-1)!.on > fixture.monthEnd) {
+      assert.equal(uncovered.forecast.status, 'unknown');
+      assert.ok(uncovered.forecast.reasonCodes.includes('ADJACENT_PERIOD_UNKNOWN'));
+    }
     await client.query('ROLLBACK TO SAVEPOINT empty_profile');
     const proposal = [{
       title: '额外小吃', plannedOn: fixture.monthEnd, userEstimatedAmountMinor: 1000,
@@ -107,44 +119,24 @@ test('A03 reads one owned period, evaluates B02 drafts and never writes budget/o
     const rolling = await forecastBudgetCashflow(client, fixture.ownerId, fixture.periodId,
       { rolling30: true, now });
     if (rolling.forecast.daily.at(-1)!.on > fixture.monthEnd) {
-      assert.equal(rolling.forecast.status, 'unknown');
-      assert.ok(rolling.forecast.reasonCodes.includes('ADJACENT_PERIOD_UNKNOWN'));
-      await client.query('SAVEPOINT adjacent');
-      const nextMonthStart = new Date(`${fixture.monthStart}T00:00:00Z`);
-      nextMonthStart.setUTCMonth(nextMonthStart.getUTCMonth() + 1);
-      const nextMonthStartText = nextMonthStart.toISOString().slice(0, 10);
-      const followingMonth = new Date(nextMonthStart);
-      followingMonth.setUTCMonth(followingMonth.getUTCMonth() + 1);
-      followingMonth.setUTCDate(0);
-      const nextMonthEndText = followingMonth.toISOString().slice(0, 10);
-      const existingNext = await client.query('SELECT 1 FROM budget_periods WHERE owner_id=$1 AND primary_account_id=$2 AND month_start=$3::date',
-        [fixture.ownerId, fixture.accountId, nextMonthStartText]);
-      if (!existingNext.rowCount) {
-        const nextPeriodId = randomUUID();
-        await client.query(`INSERT INTO budget_periods
-          (id,owner_id,primary_account_id,baseline_snapshot_id,month_start,month_end,savings_target_minor,status)
-          VALUES($1,$2,$3,$4,$5,$6,60000,'active')`, [
-          nextPeriodId, fixture.ownerId, fixture.accountId, fixture.snapshotId,
-          nextMonthStartText, nextMonthEndText,
-        ]);
-        await client.query(`INSERT INTO budget_items
-          (id,owner_id,period_id,account_id,kind,title,planned_on,user_estimated_amount_minor,priority)
-          VALUES($1,$2,$3,$4,'planned_spend','下月目标',$5,10000,'adjustable')`, [
-          randomUUID(), fixture.ownerId, nextPeriodId, fixture.accountId, nextMonthStartText,
-        ]);
-        await client.query(`INSERT INTO budget_items
-          (id,owner_id,period_id,account_id,kind,title,planned_on,user_estimated_amount_minor,priority)
-          VALUES($1,$2,$3,$4,'expected_income','下月预计收入',$5,100000,'required')`, [
-          randomUUID(), fixture.ownerId, nextPeriodId, fixture.accountId, nextMonthStartText,
-        ]);
-        const covered = await forecastBudgetCashflow(client, fixture.ownerId, fixture.periodId,
-          { rolling30: true, now });
-        assert.equal(covered.forecast.status, 'allowed');
-        assert.equal(covered.forecast.periodEndCashMinor, 60000);
-        assert.equal(covered.forecast.minimumSavingsHeadroomMinor, 0);
-        assert.equal(covered.conditionalIncomeMinor, 100000); // Display-only.
-      }
-      await client.query('ROLLBACK TO SAVEPOINT adjacent');
+      assert.equal(rolling.forecast.status, 'allowed');
+      assert.ok(!rolling.forecast.reasonCodes.includes('ADJACENT_PERIOD_UNKNOWN'));
+      await client.query('SAVEPOINT conditional_income');
+      const nextPeriod = (await client.query<{ id: string; month_start: Date }>(`SELECT id,month_start
+        FROM budget_periods WHERE owner_id=$1 AND primary_account_id=$2 AND month_start>=$3::date
+        ORDER BY month_start LIMIT 1`, [fixture.ownerId, fixture.accountId, fixture.monthEnd])).rows[0]!;
+      assert.ok(nextPeriod);
+      await client.query(`INSERT INTO budget_items
+        (id,owner_id,period_id,account_id,kind,title,planned_on,user_estimated_amount_minor,priority)
+        VALUES($1,$2,$3,$4,'expected_income','下月预计收入',$5,100000,'required')`, [
+        randomUUID(), fixture.ownerId, nextPeriod.id, fixture.accountId, nextPeriod.month_start,
+      ]);
+      const withIncome = await forecastBudgetCashflow(client, fixture.ownerId, fixture.periodId,
+        { rolling30: true, now });
+      assert.equal(withIncome.conditionalIncomeMinor, 100000);
+      assert.equal(withIncome.forecast.minimumSavingsHeadroomMinor,
+        rolling.forecast.minimumSavingsHeadroomMinor); // Conditional income is display-only.
+      await client.query('ROLLBACK TO SAVEPOINT conditional_income');
     }
     await client.query('SAVEPOINT revoked');
     await client.query(`UPDATE finance_accounts SET status='revoked',revoked_at=now() WHERE id=$1`,
@@ -185,6 +177,5 @@ test('A03 reads one owned period, evaluates B02 drafts and never writes budget/o
     await app.close();
     await client.query('ROLLBACK');
     client.release();
-    await closePool();
   }
 });
