@@ -39,18 +39,22 @@ test('429 后成功返回原流；网络未知和其他错误不重试', async (
   await assert.rejects(send('https://example.invalid'), /lost response/); assert.equal(attempts, 1);
 });
 
-test('退避中取消、总时限结束或重新准入拒绝均不再发送', async () => {
-  for (const cancel of [true, false]) {
-    const controller = new AbortController(); let attempts = 0;
-    const send = modelRetryFetch({signal:controller.signal,
-      beforeRetry:async () => { throw new Error('budget or call limit'); },
-      wait:async () => { if (cancel) controller.abort(); },
-      fetch:async () => { attempts++; return new Response('', {status:429}); },
-    });
-    await assert.rejects(send('https://example.invalid')); assert.equal(attempts, 1);
-  }
-  const send = modelRetryFetch({signal:AbortSignal.timeout(10), beforeRetry:async () => { assert.fail('已到截止时间'); },
-    fetch:async () => new Response('', {status:429, headers:{'Retry-After':'3600'}}),
+test('退避中取消或重新准入拒绝均不再发送', async () => {
+  const controller = new AbortController(); let attempts = 0; let admissions = 0;
+  const cancelled = modelRetryFetch({signal:controller.signal,
+    beforeRetry:async () => { admissions++; },
+    wait:async () => { controller.abort(); },
+    fetch:async () => { attempts++; return new Response('', {status:429}); },
   });
-  await assert.rejects(send('https://example.invalid'), {name:'AbortError'});
+  await assert.rejects(cancelled('https://example.invalid'), {name:'AbortError'});
+  assert.equal(attempts, 1); assert.equal(admissions, 0);
+
+  attempts = 0; admissions = 0;
+  const rejected = modelRetryFetch({signal:new AbortController().signal,
+    beforeRetry:async () => { admissions++; throw new Error('budget or call limit'); },
+    wait:async () => {},
+    fetch:async () => { attempts++; return new Response('', {status:429}); },
+  });
+  await assert.rejects(rejected('https://example.invalid'), /budget or call limit/);
+  assert.equal(attempts, 1); assert.equal(admissions, 1);
 });

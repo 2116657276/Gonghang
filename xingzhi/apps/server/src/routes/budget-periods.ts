@@ -69,7 +69,7 @@ export async function registerBudgetPeriodApi(app: FastifyInstance) {
     return { data: { periodId: result.periodId, accountId: result.accountId,
       financialVersion: result.financialVersion, periodVersion: result.periodVersion,
       asOf: result.asOf, conditionalIncomeMinor: result.conditionalIncomeMinor,
-      forecast: result.forecast },
+      forecast: result.forecast, conditionalForecast: result.conditionalForecast },
     meta: { financialVersion: result.financialVersion, periodVersion: result.periodVersion,
       asOf: result.asOf } };
   });

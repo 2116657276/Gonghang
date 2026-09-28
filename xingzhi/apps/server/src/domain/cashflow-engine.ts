@@ -1,7 +1,7 @@
 export type CashflowEvent = {
   on: string;
   deltaMinor: number;
-  kind: 'planned_expense' | 'repayment' | 'committed_order' | 'confirmed_future_cash';
+  kind: 'planned_expense' | 'repayment' | 'committed_order' | 'confirmed_future_cash' | 'expected_income';
   referenceId: string;
 };
 

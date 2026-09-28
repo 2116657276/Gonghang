@@ -46,6 +46,7 @@ export type FinanceAccountFacts = {
   latestSnapshot: null | { asOf: string; availableBalanceMinor: number | null };
   cashBasis: { confirmedCashMinor: number | null; asOf: string | null; dataStatus: 'observed' | 'unknown'; reasonCodes: string[] };
   ledger: LedgerEntry[];
+  manualLedger: LedgerEntry[];
   obligations: { items: Array<{ id: string; label: string; dueOn: string; remainingDueMinor?: number | null;
     amountDueMinor: number | null; status: string }>; remainingDueMinor: number | null; dataStatus: string };
   displayOnly: { expectedIncomeMinor: number; pendingInflowMinor: number; pendingOutflowMinor: number; pendingRefundMinor: number };
@@ -66,11 +67,12 @@ export type BudgetPeriod = {
     affectedDates: string[]; reasonCodes: string[]; daily: Array<{ on: string; projectedCashMinor: number | null;
       savingsHeadroomMinor: number | null; cashShortfallMinor: number | null; savingsShortfallMinor: number | null;
       dataStatus: 'observed' | 'unknown'; events: Array<{ on: string; deltaMinor: number;
-        kind: 'planned_expense' | 'repayment' | 'committed_order' | 'confirmed_future_cash'; referenceId: string }> }> };
+        kind: 'planned_expense' | 'repayment' | 'committed_order' | 'confirmed_future_cash' | 'expected_income'; referenceId: string }> }> };
 };
 export type RollingCashflow = {
   periodId: string; accountId: string; financialVersion: number; periodVersion: number;
   asOf: string | null; conditionalIncomeMinor: number; forecast: BudgetPeriod['forecast'];
+  conditionalForecast?: BudgetPeriod['forecast'];
 };
 export type BudgetItemImpact = {
   periodId: string; itemId: string; financialVersion: number; periodVersion: number;

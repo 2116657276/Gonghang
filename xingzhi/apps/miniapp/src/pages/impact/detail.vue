@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
-import Taro, { useLoad } from '@tarojs/taro';
+import Taro, { useDidShow, useLoad } from '@tarojs/taro';
 import FactRow from '@/components/FactRow.vue';
 import PageShell from '@/components/PageShell.vue';
 import SectionCard from '@/components/SectionCard.vue';
@@ -50,9 +50,13 @@ const reasonLabels: Record<string, string> = {
   QUOTE_STALE: '候选报价已经变化，需要重新获取',
 };
 
-useLoad(async (options) => {
+useLoad((options) => {
   periodId.value = options.periodId ?? '';
   itemId.value = options.itemId ?? '';
+});
+useDidShow(() => { if (periodId.value) void load(); });
+async function load() {
+  loading.value = true; error.value = ''; impactError.value = ''; itemImpact.value = null;
   try {
     period.value = (await api.period(periodId.value)).data;
     if (item.value?.status === 'planned') {
@@ -70,11 +74,11 @@ useLoad(async (options) => {
   } finally {
     loading.value = false;
   }
-});
+}
 </script>
 
 <template>
-  <PageShell title="资金影响" :subtitle="item ? `正在查看：${item.title}` : '把复杂结果拆成可以核对的事实'" layout="detail" back>
+  <PageShell :title="item ? '资金影响' : '本月资金分析'" :subtitle="item ? `正在查看：${item.title}` : '把复杂结果拆成可以核对的事实'" layout="detail" back>
     <template #hero><button class="back" aria-label="返回" @tap="Taro.navigateBack()">‹</button></template>
     <StatePanel v-if="loading" title="正在计算当前资金影响" />
     <StatePanel v-else-if="error || !period" title="资金影响暂时不可用" :detail="error || '没有找到对应计划。'" tone="error" />
@@ -82,10 +86,10 @@ useLoad(async (options) => {
       <view v-if="impactError" class="notice notice--warning">单项比较暂时不可用：{{impactError}}。以下保留已读取的周期依据。</view>
       <SectionCard class="result-card" :class="`result-card--${status}`">
         <view class="result-heading"><view><text class="eyebrow">当前结论</text><text class="result-title">{{statusCopy.title}}</text></view><StatusBadge :label="fundingLabel(status)" :tone="statusCopy.tone"/></view>
-        <text class="result-detail">{{statusCopy.detail}}</text>
+        <text class="result-detail">{{statusCopy.detail}}</text><text v-if="!item&&status==='needs_adjustment'" class="result-guidance">可调整保留目标或可调计划，按真实需求选择。</text>
         <view class="result-number">
           <text>{{status==='allowed'?'保留目标以上余量':status==='unknown'?'当前结果':'预计缺口'}}</text>
-          <b class="amount">{{status==='allowed'?yuan(surplus):status==='unknown'?'依据不足':yuan(period.forecast.shortfallMinor)}}</b>
+          <text class="amount">{{status==='allowed'?yuan(surplus):status==='unknown'?'依据不足':yuan(period.forecast.shortfallMinor)}}</text>
         </view>
       </SectionCard>
 
@@ -103,10 +107,10 @@ useLoad(async (options) => {
 
       <SectionHeader title="预算拆分" />
       <view class="breakdown-grid">
-        <SectionCard><text>确认现金</text><b class="amount">{{yuan(period.basis.confirmedCashMinor)}}</b></SectionCard>
-        <SectionCard><text>必要安排</text><b class="amount">{{yuan(period.basis.essentialRemainingMinor)}}</b></SectionCard>
-        <SectionCard><text>可调计划</text><b class="amount">{{yuan(period.basis.adjustablePlannedMinor)}}</b></SectionCard>
-        <SectionCard><text>已承诺订单</text><b class="amount">{{yuan(period.basis.committedOrdersMinor)}}</b></SectionCard>
+        <SectionCard><text>确认现金</text><text class="amount">{{yuan(period.basis.confirmedCashMinor)}}</text></SectionCard>
+        <SectionCard><text>必要安排</text><text class="amount">{{yuan(period.basis.essentialRemainingMinor)}}</text></SectionCard>
+        <SectionCard><text>可调计划</text><text class="amount">{{yuan(period.basis.adjustablePlannedMinor)}}</text></SectionCard>
+        <SectionCard><text>已承诺订单</text><text class="amount">{{yuan(period.basis.committedOrdersMinor)}}</text></SectionCard>
       </view>
 
       <SectionHeader title="为什么会得到这个结论" />
@@ -117,6 +121,7 @@ useLoad(async (options) => {
 
       <view class="page-actions">
         <button v-if="item" class="primary-button" @tap="Taro.navigateTo({url:`/pages/item/detail?periodId=${periodId}&itemId=${itemId}`})">返回计划详情</button>
+        <button v-if="!item&&period.period.status!=='closed'" class="primary-button" @tap="Taro.navigateTo({url:`/pages/period/edit?id=${periodId}`})">调整保留目标</button>
         <button class="secondary-button" @tap="Taro.switchTab({url:'/pages/ai/index'})">问问行止如何调整</button>
       </view>
       <view class="notice notice--info boundary">周期结论反映本月全部安排；单项影响只比较剩余计划金额；已入账流水及现金余额保持不变。已有流水关联的项目仍不能直接修改或取消。本页不会修改计划或执行资金动作。</view>
@@ -126,6 +131,7 @@ useLoad(async (options) => {
 
 <style lang="scss">
 @use '../../styles/tokens' as *;
-.back{position:absolute;z-index:4;top:calc(34px + env(safe-area-inset-top));right:28px;width:64px;height:64px;color:$brand-deep;background:rgba(255,255,255,.78);border-radius:50%;font-size:44px}.result-card{overflow:hidden;background:linear-gradient(145deg,$surface-tint,#fff)}.result-card--needs_adjustment,.result-card--blocked{background:linear-gradient(145deg,$warning-surface,#fff)}.result-card--unknown{background:linear-gradient(145deg,$soft-surface,#fff)}.result-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:22px}.eyebrow,.result-title,.result-detail,.result-number text,.result-number b{display:block}.eyebrow{color:$text-secondary;font-size:27px}.result-title{margin-top:9px;font-size:40px;font-weight:780;line-height:1.3}.result-detail{margin-top:22px;color:$text-secondary;font-size:28px;line-height:1.65}.result-number{margin-top:30px;padding-top:24px;border-top:1px solid $border}.result-number text{color:$text-secondary;font-size:28px}.result-number b{margin-top:10px;font-size:58px;overflow-wrap:anywhere}.date-list{margin-top:22px;padding:22px;background:$soft-surface;border-radius:20px}.date-list text{display:block;font-size:28px}.date-list text+text{margin-top:9px;color:$text-secondary;line-height:1.55}.breakdown-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}.breakdown-grid .section-card{min-width:0;padding:24px}.breakdown-grid text,.breakdown-grid b{display:block}.breakdown-grid text{color:$text-secondary;font-size:26px}.breakdown-grid b{margin-top:10px;font-size:34px;overflow-wrap:anywhere}.reason-list{display:grid;gap:20px}.reason-list view{display:flex;align-items:flex-start;gap:16px}.reason-list view>text:last-child{flex:1;font-size:28px;line-height:1.6}.reason-dot{flex:0 0 14px;width:14px;height:14px;margin-top:13px;background:$warning;border-radius:50%}.page-actions{display:grid;gap:16px;margin-top:30px}.page-actions button{width:100%}.boundary{margin-top:24px;font-size:28px;line-height:1.65}
-@media screen and (max-width:360px){.result-heading{display:grid}.result-heading .status-badge{justify-self:start}.result-title{font-size:36px}.result-number b{font-size:50px}.breakdown-grid{grid-template-columns:1fr}}
+.back{position:absolute;z-index:4;top:calc(34px + env(safe-area-inset-top));right:28px;width:64px;height:64px;color:$brand-deep;background:rgba(255,255,255,.78);border-radius:50%;font-size:44px}.result-card{overflow:hidden;background:linear-gradient(145deg,$surface-tint,#fff)}.result-card--needs_adjustment,.result-card--blocked{background:linear-gradient(145deg,$warning-surface,#fff)}.result-card--unknown{background:linear-gradient(145deg,$soft-surface,#fff)}.result-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:22px}.eyebrow,.result-title,.result-detail,.result-number text,.result-number .amount{display:block}.eyebrow{color:$text-secondary;font-size:27px}.result-title{margin-top:9px;font-size:40px;font-weight:780;line-height:1.3}.result-detail{margin-top:22px;color:$text-secondary;font-size:28px;line-height:1.65}.result-number{margin-top:30px;padding-top:24px;border-top:1px solid $border}.result-number text{color:$text-secondary;font-size:28px}.result-number .amount{margin-top:10px;font-size:58px;overflow-wrap:anywhere}.date-list{margin-top:22px;padding:22px;background:$soft-surface;border-radius:20px}.date-list text{display:block;font-size:28px}.date-list text+text{margin-top:9px;color:$text-secondary;line-height:1.55}.breakdown-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}.breakdown-grid .section-card{min-width:0;padding:24px}.breakdown-grid text,.breakdown-grid .amount{display:block}.breakdown-grid text{color:$text-secondary;font-size:26px}.breakdown-grid .amount{margin-top:10px;font-size:34px;overflow-wrap:anywhere}.reason-list{display:grid;gap:20px}.reason-list view{display:flex;align-items:flex-start;gap:16px}.reason-list view>text:last-child{flex:1;font-size:28px;line-height:1.6}.reason-dot{flex:0 0 14px;width:14px;height:14px;margin-top:13px;background:$warning;border-radius:50%}.page-actions{display:grid;gap:16px;margin-top:30px}.page-actions button{width:100%}.boundary{margin-top:24px;font-size:28px;line-height:1.65}
+@media screen and (max-width:360px){.result-heading{display:grid}.result-heading .status-badge{justify-self:start}.result-title{font-size:36px}.result-number .amount{font-size:50px}.breakdown-grid{grid-template-columns:1fr}}
+.result-number .amount,.breakdown-grid .amount{color:$brand-deep}.result-guidance{display:block;margin-top:12px;color:$text-secondary;font-size:26px;line-height:1.5}
 </style>

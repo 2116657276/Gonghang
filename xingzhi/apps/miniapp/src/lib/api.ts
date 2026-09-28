@@ -74,15 +74,21 @@ export const api = {
     return { user: result.data.user };
   },
   logout: async () => {
+    let revoked = false;
     try {
       await request<void>('/session', { method: 'DELETE', idempotent: false, redirectOnUnauthorized: false });
+      revoked = true;
+    } catch (reason) {
+      if (reason instanceof ApiError && reason.status === 401) revoked = true;
+      else throw reason;
     } finally {
-      // 退出是用户的本地安全操作。即使服务端暂时不可达，也不能把
-      // bearer token 和待提交内容继续留在设备上。
-      clearClientSession();
+      // 小程序断网时仍可清除本机 Bearer；H5 必须等服务端清除 HttpOnly Cookie。
+      if (!isH5Runtime || revoked) clearClientSession();
     }
   },
   accounts: () => request<ApiEnvelope<{ accounts: import('./types').FinanceAccountFacts[] }>>('/finance/accounts'),
+  addManualExpense: (id: string, data: { occurredOn: string; amountMinor: number; category: string; summary: string }) =>
+    request<ApiEnvelope<{ entryId: string }>>(`/finance/accounts/${id}/manual-ledger`, { method: 'POST', data }),
   preferences: () => request<ApiEnvelope<ConsumerPreferences>>('/consumer-preferences'),
   updatePreferences: (data: { defaultAccountId?: string | null; notifications?: ConsumerPreferences['notifications'] }) =>
     request<ApiEnvelope<ConsumerPreferences>>('/consumer-preferences', { method: 'PATCH', data }),

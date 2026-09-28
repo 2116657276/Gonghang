@@ -168,6 +168,28 @@ test('A00 fixture repeats without changing historical facts; A01 restricts cash 
       (error: { code?: string }) => error.code === 'FINANCE_BASIS_UNKNOWN');
     await client.query('ROLLBACK TO SAVEPOINT obligations');
 
+    await client.query('SAVEPOINT manual_expense');
+    const manualUrl = `/api/finance/accounts/${fixture.accountId}/manual-ledger`;
+    const manualHeaders = { origin: config.webOrigin, 'idempotency-key': 'manual-expense-0001',
+      'x-test-user': 'owner' };
+    const manualBody = { occurredOn: new Date().toISOString().slice(0, 10),
+      amountMinor: 2850, category: 'food', summary: '午餐' };
+    assert.equal((await app.inject({ method: 'POST', url: manualUrl,
+      headers: { ...manualHeaders, 'x-test-user': 'other' }, payload: manualBody })).statusCode, 404);
+    assert.equal((await app.inject({ method: 'POST', url: manualUrl, headers: manualHeaders,
+      payload: { ...manualBody, occurredOn: '2026-02-30' } })).statusCode, 400);
+    const manual = await app.inject({ method: 'POST', url: manualUrl,
+      headers: manualHeaders, payload: manualBody });
+    assert.equal(manual.statusCode, 200);
+    assert.deepEqual((await app.inject({ method: 'POST', url: manualUrl,
+      headers: manualHeaders, payload: manualBody })).json(), manual.json());
+    const withManual = await loadFinanceAccountFacts(client, fixture.ownerId, fixture.accountId);
+    assert.equal(withManual.manualLedger.length, 1);
+    assert.equal(withManual.manualLedger[0]?.source, 'user_input');
+    assert.equal(withManual.cashBasis.confirmedCashMinor, first.cashBasis.confirmedCashMinor);
+    assert.equal(withManual.account.financialVersion, first.account.financialVersion);
+    await client.query('ROLLBACK TO SAVEPOINT manual_expense');
+
     const url = `/api/finance/accounts/${fixture.accountId}/revocations`;
     const affectedPeriods = (await client.query<{ id: string }>(`SELECT id FROM budget_periods
       WHERE owner_id=$1 AND primary_account_id=$2 AND status='active' ORDER BY id`,

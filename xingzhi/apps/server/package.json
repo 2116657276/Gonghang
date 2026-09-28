@@ -11,6 +11,8 @@
     "db:seed:consumer-catalog": "tsx src/db/seed-consumer-catalog.ts",
     "db:seed:consumer-finance": "tsx src/db/seed-consumer-finance.ts",
     "db:seed:consumer-september-demo": "tsx src/db/seed-consumer-september-demo.ts",
+    "db:seed:consumer-september-daily": "tsx src/db/seed-consumer-september-daily.ts",
+    "db:seed:consumer-autumn-plans": "tsx src/db/seed-consumer-autumn-plans.ts",
     "db:seed:consumer-scenario": "tsx src/db/seed-consumer-scenario.ts",
     "typecheck": "tsc --noEmit",
     "test:targeted": "node --test --test-concurrency=1 --import tsx src/domain/*.test.ts src/payment/*.test.ts",

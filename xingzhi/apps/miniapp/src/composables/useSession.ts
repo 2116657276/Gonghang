@@ -1,6 +1,7 @@
 import { ref } from 'vue';
 import { api } from '@/lib/api';
 import { cachedSessionUser, clearClientSession } from '@/lib/session';
+import { isH5Runtime } from '@/lib/runtime-config';
 import type { User } from '@/lib/types';
 
 const user = ref<User | null>(cachedSessionUser());
@@ -27,10 +28,11 @@ export function useSession() {
   async function signOut() {
     try {
       await api.logout();
-    } finally {
-      clearClientSession();
-      user.value = null;
+    } catch (reason) {
+      if (isH5Runtime) throw reason;
     }
+    clearClientSession();
+    user.value = null;
   }
 
   function forget() {

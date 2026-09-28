@@ -241,3 +241,27 @@ test('R2 自动退款批次沿原订单商户归属复核，其他商户拒绝',
     accepted.operationId!, { reason: '其他商户不得复核' })), (error: { statusCode?: number }) => error.statusCode === 404);
   assert.equal(Number((await pool.query('SELECT count(*) FROM refund_batches WHERE order_id=$1', [created.orderId])).rows[0].count), 1);
 });
+
+
+test('购买确认返回提交后版本，幂等重放不新增订单或推进版本', async () => {
+  const f = await m1ClosureFixture();
+  const created = await f.createIntent();
+  const { confirmPurchaseIntent } = await import('./consumer-orders.js');
+  const { runIdempotent } = await import('./idempotency.js');
+  const input = { acceptedAmountMinor: 9900, expectedFinancialVersion: created.basis.financial,
+    expectedPeriodVersion: created.basis.period, expectedQuoteVersion: 1, confirmedByUser: true as const };
+  const key = randomUUID();
+  const confirm = () => transaction(client => runIdempotent(client, f.ids.user,
+    `POST /api/purchase-intents/${created.intent.purchaseIntentId}/confirm`, key, input,
+    async () => ({ data: await confirmPurchaseIntent(client, f.ids.user, created.intent.purchaseIntentId, input) })));
+  const first = await confirm();
+  const versions = await f.versions();
+  assert.equal(first.data.periodVersion, versions.period);
+  assert.equal(first.data.financialVersion, versions.financial);
+  assert.equal(versions.period, created.basis.period + 1);
+  const repeated = await confirm();
+  assert.deepEqual(repeated, first);
+  assert.deepEqual(await f.versions(), versions);
+  assert.equal(Number((await pool.query('SELECT count(*) FROM orders WHERE budget_period_id=$1',
+    [f.ids.period])).rows[0].count), 1);
+});

@@ -9,7 +9,8 @@ const props = withDefaults(defineProps<{
   compact?: boolean;
   layout?: 'legacy' | 'main' | 'detail' | 'conversation';
   back?: boolean;
-}>(), { subtitle: '', compact: false, layout: 'legacy', back: false });
+  backFallback?: string;
+}>(), { subtitle: '', compact: false, layout: 'legacy', back: false, backFallback: '/pages/home/index' });
 const systemInsetStyle = getSystemInsetStyle();
 const navigationLayout = computed(() => props.layout === 'legacy' && props.compact ? 'detail' : props.layout);
 const showBack = computed(() => props.back || (props.layout === 'legacy' && props.compact));
@@ -18,7 +19,7 @@ async function goBack() {
   try {
     await Taro.navigateBack();
   } catch {
-    await Taro.switchTab({ url: '/pages/home/index' });
+    await Taro.switchTab({ url: props.backFallback });
   }
 }
 </script>

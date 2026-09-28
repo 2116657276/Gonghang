@@ -68,7 +68,8 @@ export function describeBudget(result: Awaited<ReturnType<typeof readBudgetPerio
     .flatMap(day => day.events.map(event => {
       const item = result.items.find(item => item.itemId === event.referenceId);
       const title = item?.title ?? ({ planned_expense: '计划支出', repayment: '还款安排',
-        committed_order: '已承诺订单', confirmed_future_cash: '已确认资金' })[event.kind];
+        committed_order: '已承诺订单', confirmed_future_cash: '已确认资金',
+        expected_income: '预计收入（条件情景）' })[event.kind];
       return `${day.on} ${title}：${displayMoney(event.deltaMinor)}`;
     }));
   return [

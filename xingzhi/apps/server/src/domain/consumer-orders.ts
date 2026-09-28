@@ -112,12 +112,16 @@ export async function confirmPurchaseIntent(
     confirmedByUser: input.confirmedByUser,
   }, writeConfirmedOrder);
   const order = await readOrder(client, ownerId, committed.orderId);
+  const versions = (await client.query<{ financialVersion: string; periodVersion: string }>(`SELECT
+      a.financial_version AS "financialVersion",p.version AS "periodVersion"
+    FROM budget_periods p JOIN finance_accounts a ON a.id=p.primary_account_id
+    WHERE p.id=$1 AND p.owner_id=$2`, [intent.periodId, ownerId])).rows[0]!;
   return purchaseIntentConfirmationView.parse({
     purchaseIntentId,
     status: 'ordered',
     order,
-    financialVersion: input.expectedFinancialVersion + 1,
-    periodVersion: input.expectedPeriodVersion,
+    financialVersion: Number(versions.financialVersion),
+    periodVersion: Number(versions.periodVersion),
     paymentHandoffRequired: true,
   });
 }

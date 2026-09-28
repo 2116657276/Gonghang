@@ -145,6 +145,12 @@ export async function loadFinanceAccountFacts(db: FinanceDb, ownerId: string, ac
     LEFT JOIN budget_ledger_links budget_link ON budget_link.entry_id=entry.id AND budget_link.active
     LEFT JOIN budget_items linked_item ON linked_item.id=budget_link.item_id
     WHERE entry.account_id=$1 AND entry.owner_id=$2 ORDER BY entry.occurred_at DESC,entry.id DESC`, [accountId, ownerId])).rows;
+  const manualLedger = (await db.query<{ id: string; occurredOn: string; amountMinor: number;
+    category: string; summary: string }>(`SELECT id,
+    to_char(occurred_on,'YYYY-MM-DD') AS "occurredOn",amount_minor AS "amountMinor",
+    category,summary FROM manual_ledger_entries
+    WHERE account_id=$1 AND owner_id=$2 ORDER BY occurred_on DESC,created_at DESC,id DESC`,
+  [accountId, ownerId])).rows;
   const obligationRows = (await db.query<ObligationRow>(`SELECT o.id,o.obligation_type AS "obligationType",
     o.liability_account_id AS "liabilityAccountId", liability.account_type AS "liabilityAccountType",
     o.repayment_account_id AS "repaymentAccountId", repayment.account_type AS "repaymentAccountType",
@@ -238,6 +244,12 @@ export async function loadFinanceAccountFacts(db: FinanceDb, ownerId: string, ac
         periodId: entry.linkedPeriodId!, itemId: entry.linkedItemId!,
         title: entry.linkedItemTitle!, coveredMinor: safeAmount(entry.linkedCoveredMinor)! } : null,
     })),
+    manualLedger: manualLedger.map(entry => ({ entryId: entry.id, direction: 'outflow' as const,
+      amountMinor: safeAmount(entry.amountMinor)!, occurredAt: `${entry.occurredOn}T12:00:00+08:00`,
+      postedAt: null, status: 'posted' as const, source: 'user_input',
+      category: entry.category, originalCategory: entry.category,
+      displayCategory: entry.category, orderId: null, summary: entry.summary,
+      isRefund: false, linkedPlan: null })),
     obligations: account.accountType === 'debit'
       ? obligations : { items: obligationRows.filter((row) => row.liabilityAccountId === accountId).map((row) => ({
         id: row.id, label: row.label, obligationType: row.obligationType, dueOn: row.dueOn,

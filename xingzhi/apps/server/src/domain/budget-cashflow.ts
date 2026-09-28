@@ -205,12 +205,13 @@ export async function forecastBudgetCashflow(client: PoolClient, ownerId: string
     pendingRefundMinor: account.displayOnly.pendingRefundMinor,
     refundEvidenceNotCash: account.displayOnly.refundEvidenceNotCash };
   if (period.status !== 'active' || today < period.monthStart || today > period.monthEnd) {
-    return { ...meta, forecast: unknownDailyCashflow(startOn, endOn, ['PERIOD_NOT_ACTIVE_OR_CURRENT']) };
+    return { ...meta, conditionalForecast: undefined,
+      forecast: unknownDailyCashflow(startOn, endOn, ['PERIOD_NOT_ACTIVE_OR_CURRENT']) };
   }
   if (account.cashBasis.dataStatus !== 'observed' || account.obligations.dataStatus !== 'observed') {
     const obligationIssues = account.obligations.items.flatMap((row) =>
       'dataIssue' in row && row.dataIssue ? [row.dataIssue] : []);
-    return { ...meta, forecast: unknownDailyCashflow(startOn, endOn,
+    return { ...meta, conditionalForecast: undefined, forecast: unknownDailyCashflow(startOn, endOn,
       [...account.cashBasis.reasonCodes, ...obligationIssues, 'FINANCE_BASIS_UNKNOWN']) };
   }
   const necessities = await client.query(`SELECT 1 FROM budget_periods
@@ -220,7 +221,7 @@ export async function forecastBudgetCashflow(client: PoolClient, ownerId: string
       AND (kind='essential_expense' OR priority='required') LIMIT 1`,
   [periodId, ownerId]);
   if (!necessities.rowCount) {
-    return { ...meta, forecast: unknownDailyCashflow(startOn, endOn,
+    return { ...meta, conditionalForecast: undefined, forecast: unknownDailyCashflow(startOn, endOn,
       ['BUDGET_NECESSITIES_UNCONFIRMED']) };
   }
   const items = await readPlannedItems(client, ownerId, period.accountId, endOn);
@@ -344,7 +345,19 @@ export async function forecastBudgetCashflow(client: PoolClient, ownerId: string
       events: built.events, unknownDates: missingMonths,
       savingsTargetsByDate: options.rolling30 ? savingsTargetsByDate : undefined,
     });
+  // Display-only scenario: expected income never changes the conservative funding forecast.
+  const conditionalForecast = options.rolling30 && !unresolved
+    ? calculateDailyCashflow({
+      openingCashMinor: account.cashBasis.confirmedCashMinor!,
+      savingsTargetMinor: safeMinor(period.savingsTargetMinor), startOn, endOn,
+      events: [...built.events, ...effectiveItems.filter((item) => item.kind === 'expected_income'
+        && item.status === 'planned' && item.plannedOn >= startOn && item.plannedOn <= endOn)
+        .map((item): CashflowEvent => ({ on: item.plannedOn,
+          deltaMinor: safeMinor(item.estimatedMinor), kind: 'expected_income', referenceId: item.id }))],
+      unknownDates: missingMonths, savingsTargetsByDate,
+    }) : undefined;
   return { ...meta, conditionalIncomeMinor: built.conditionalIncomeMinor,
+    conditionalForecast,
     forecast: missingMonths.length && forecast.status === 'unknown'
       ? { ...forecast, reasonCodes: [...new Set([...forecast.reasonCodes, 'ADJACENT_PERIOD_UNKNOWN'])] }
       : forecast };

@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { PoolClient } from 'pg';
 import { z, ZodError } from 'zod';
-import { demoAccountReauthorizationInput, financeAccountRevocationInput, ledgerCategoryChangeInput } from '@xingzhi/contracts';
+import { demoAccountReauthorizationInput, financeAccountRevocationInput, ledgerCategoryChangeInput, ledgerDisplayCategories } from '@xingzhi/contracts';
 import { isTrustedWriteRequest } from '../auth/guards.js';
 import { query, transaction } from '../db/client.js';
 import { AppError } from '../domain/errors.js';
@@ -12,6 +12,12 @@ import { runIdempotent } from '../domain/idempotency.js';
 type TransactionRunner = <T>(run: (client: PoolClient) => Promise<T>) => Promise<T>;
 const accountPath = z.object({ id: z.string().uuid() }).strict();
 const ledgerPath = z.object({ id: z.string().uuid() }).strict();
+const manualExpenseInput = z.object({
+  occurredOn: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/),
+  amountMinor: z.number().int().positive().max(100_000_000),
+  category: z.enum(ledgerDisplayCategories).refine(value => value !== 'income' && value !== 'refund'),
+  summary: z.string().trim().min(1).max(80),
+}).strict();
 
 function writeKey(request: FastifyRequest) {
   if (!isTrustedWriteRequest(request)) {
@@ -124,6 +130,37 @@ export async function registerFinanceAccountApi(app: FastifyInstance, options: {
       accounts.push(await loadFinanceAccountFacts(db, request.authUser!.id, row.id));
     }
     return { data: { accounts }, meta: {} };
+  });
+  app.post('/api/finance/accounts/:id/manual-ledger', async (request) => {
+    const { id } = accountPath.parse(request.params);
+    const input = manualExpenseInput.parse(request.body);
+    const key = writeKey(request);
+    const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai',
+      year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+    const parsed = new Date(`${input.occurredOn}T12:00:00+08:00`);
+    if (input.occurredOn > today || Number.isNaN(parsed.getTime())) {
+      throw new AppError(400, 'VALIDATION_ERROR', '只能记录真实存在且不晚于今天的日期。');
+    }
+    const actualDate = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai',
+      year: 'numeric', month: '2-digit', day: '2-digit' }).format(parsed);
+    if (actualDate !== input.occurredOn) throw new AppError(400, 'VALIDATION_ERROR', '记账日期无效。');
+    return runTransaction(client => runIdempotent(client, request.authUser!.id,
+      `POST /api/finance/accounts/${id}/manual-ledger`, key, input, async () => {
+        const account = (await client.query<{ status: string; accountType: string }>(`
+          SELECT status,account_type AS "accountType" FROM finance_accounts
+          WHERE id=$1 AND owner_id=$2 FOR UPDATE`, [id, request.authUser!.id])).rows[0];
+        if (!account) throw new AppError(404, 'RESOURCE_FORBIDDEN', '未找到本人账户。');
+        if (account.status !== 'linked' || account.accountType !== 'debit') {
+          throw new AppError(409, 'FINANCE_SCOPE_REVOKED', '只能在本人已连接的借记账户下手动记账。');
+        }
+        const entryId = randomUUID();
+        await client.query(`INSERT INTO manual_ledger_entries
+          (id,owner_id,account_id,occurred_on,amount_minor,category,summary)
+          VALUES($1,$2,$3,$4::date,$5,$6,$7)`,
+        [entryId, request.authUser!.id, id, input.occurredOn,
+          input.amountMinor, input.category, input.summary]);
+        return { data: { entryId }, meta: {} };
+      }));
   });
   app.post('/api/finance/accounts/:id/revocations', async (request) => {
     const { id } = accountPath.parse(request.params);

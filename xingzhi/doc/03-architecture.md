@@ -53,7 +53,7 @@ PostgreSQL                    Worker / 支付适配
 | 业务模块 | 路由文件 | 代表性路径 |
 | --- | --- | --- |
 | 会话与目录 | `routes/api.ts` | `/api/sessions`、`/api/miniapp/sessions`、`/api/session`、`/api/catalog`、`/api/payment-readiness` |
-| 账户与流水 | `routes/finance-accounts.ts` | `/api/finance/accounts`、账户撤回/重新授权、流水分类纠正 |
+| 账户与流水 | `routes/finance-accounts.ts` | `/api/finance/accounts`、`/api/finance/accounts/:id/manual-ledger`、账户撤回/重新授权、流水分类纠正 |
 | 周期与项目 | `routes/budget-periods.ts`、`budget-items.ts` | `/api/budget-periods`、本人只读 30 天预测 `/api/budget-periods/:id/rolling-cashflow`、只读项目变更预览 `/api/budget-periods/:id/items/change-preview`、激活、目标变更、项目新增/修改/取消 |
 | 报价与购买 | `routes/offers.ts`、`finance-assessments.ts`、`purchase-intents.ts` | `/api/offers`、`/api/finance/assessments`、`/api/purchase-intents`、`/api/orders` |
 | 支付与善后 | `routes/api.ts`、`consumer-aftercare.ts` | 付款交接/主动查单、取消预览/确认、操作和退款复核 |
@@ -78,7 +78,7 @@ PostgreSQL                    Worker / 支付适配
 | 事实类别 | 当前实体/位置 | 说明 |
 | --- | --- | --- |
 | 身份 | `users`、`sessions` | 消费者、`merchant_admin`、`reviewer`；服务端会话是权限来源 |
-| 账户与账目 | `finance_accounts`、`finance_account_snapshots`、`finance_ledger_entries`、`finance_obligations` | 账户快照、流水、账单/还款安排；分类覆盖不改原始流水 |
+| 账户与账目 | `finance_accounts`、`finance_account_snapshots`、`finance_ledger_entries`、`manual_ledger_entries`、`finance_obligations` | 银行/Demo 余额与流水、独立的用户手动消费记录、账单/还款安排；手动记录不改变账户现金事实 |
 | 规划 | `budget_periods`、`budget_items`、`budget_events` | 自然月周期、项目、版本和事件；未来 30 日由事实派生 |
 | 商品与报价 | `catalog_items`、`offer_quotes`、`funding_assessments` | 登记商品、报价版本、可执行方式和购买前资金评估 |
 | 购买与支付 | `purchase_intents`、`orders`、`payment_attempts`、`operations`、`jobs` | 用户意图、订单、支付尝试、异步操作和恢复；固定业务号与幂等键 |
@@ -98,7 +98,7 @@ Simulation 由本地 Worker/受控结果完成；Sandbox 付款可能返回官�
 
 ## 7. 数据库迁移与接手核对
 
-当前仓库包含 `001_s1_base.sql` 至 `036_revoked_period_recovery_version.sql`，最新编号为 036。迁移脚本按文件名顺序读取，并在目标数据库的 `schema_migrations` 中记录已经应用的文件。
+当前仓库包含 `001_s1_base.sql` 至 `037_manual_ledger.sql`，最新编号为 037。迁移 `037` 新增独立的 `manual_ledger_entries` 手动消费记录表；它不写入银行/Demo 流水或余额快照。迁移脚本按文件名顺序读取，并在目标数据库的 `schema_migrations` 中记录已经应用的文件。
 
 这只说明仓库有这些迁移，不说明当前机器或目标数据库已经执行。接手时应单独核对目标数据库的迁移登记，再决定是否运行迁移；不能为了让文档数字一致而手工改表，也不能重写已经应用的 SQL。新变更只追加更大的编号。
 

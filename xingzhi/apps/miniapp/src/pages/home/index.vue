@@ -113,54 +113,45 @@ const planItems = computed(() => overview.currentPeriod.value?.items.filter(item
 const forecastStatus = computed(() => overview.currentPeriod.value?.forecast.status ?? 'unknown');
 const rollingForecast = computed(() => rolling.value?.forecast ?? null);
 const rollingDaily = computed(() => rollingForecast.value?.daily ?? []);
-function demoDate(offset: number) {
-  const date = new Date();
-  date.setDate(date.getDate() + offset);
-  const month = `${date.getMonth() + 1}`.padStart(2, '0');
-  const day = `${date.getDate()}`.padStart(2, '0');
-  return `${date.getFullYear()}-${month}-${day}`;
-}
-const showingDemoTrend = computed(() => !rollingDaily.value.some(day => day.projectedCashMinor !== null));
-const demoTrendDaily = computed(() => {
-  const opening = overview.primaryAccount.value?.cashBasis.confirmedCashMinor ?? 1280000;
-  const values = [opening, opening - 120000, opening - 50000, opening - 260000, opening - 180000, opening - 90000];
-  return [0, 6, 12, 18, 24, 30].map((offset, index) => ({
-    on: demoDate(offset), projectedCashMinor: values[index]!, savingsHeadroomMinor: null,
-    cashShortfallMinor: null, savingsShortfallMinor: null, dataStatus: 'unknown' as const, events: [],
-  }));
-});
-const trendDaily = computed(() => showingDemoTrend.value ? demoTrendDaily.value : rollingDaily.value);
-const chartDays = computed(() => {
-  const daily = trendDaily.value;
-  if (!daily.some(day => day.projectedCashMinor !== null)) return [];
-  const lastIndex = daily.length - 1;
-  const minimumIndex = showingDemoTrend.value
-    ? daily.reduce((lowest, day, index) => (day.projectedCashMinor ?? Infinity) < (daily[lowest]?.projectedCashMinor ?? Infinity) ? index : lowest, 0)
-    : daily.findIndex(day => day.on === rollingForecast.value?.minimumCashOn);
-  const indexes = [0, Math.round(lastIndex / 3), minimumIndex, Math.round(lastIndex * 2 / 3), lastIndex]
-    .filter(index => index >= 0 && index <= lastIndex);
-  return [...new Set(indexes)].sort((a, b) => a - b).map(index => daily[index]!);
+const trendForecast = computed(() => rolling.value?.conditionalForecast ?? rollingForecast.value);
+const trendDaily = computed(() => trendForecast.value?.daily ?? []);
+const hasIncomeScenario = computed(() => !!rolling.value?.conditionalForecast
+  && trendDaily.value.some(day => day.events.some(event => event.kind === 'expected_income')));
+const trendMinimum = computed(() => {
+  const forecast = trendForecast.value;
+  if (forecast?.status !== 'unknown' && forecast?.minimumProjectedCashMinor != null && forecast.minimumCashOn) {
+    return { on: forecast.minimumCashOn, value: forecast.minimumProjectedCashMinor };
+  }
+  const known = trendDaily.value.flatMap(day => day.projectedCashMinor === null
+    ? [] : [{ on: day.on, value: day.projectedCashMinor }]);
+  return known.length ? known.reduce((lowest, day) => day.value < lowest.value ? day : lowest) : null;
 });
 const chartPoints = computed(() => {
-  const days = chartDays.value;
+  const days = trendDaily.value;
   const values = days.map(day => day.projectedCashMinor).filter((value): value is number => value !== null);
   if (!values.length) return [];
   const minimum = Math.min(...values);
   const maximum = Math.max(...values);
   const range = Math.max(1, maximum - minimum);
-  const minimumOn = (showingDemoTrend.value ? undefined : rollingForecast.value?.minimumCashOn)
-    ?? days.find(day => day.projectedCashMinor === minimum)?.on;
+  const firstTime = Date.parse(`${days[0]!.on}T00:00:00Z`);
+  const lastTime = Date.parse(`${days[days.length - 1]!.on}T00:00:00Z`);
   return days.map((day, index) => {
     const value = day.projectedCashMinor;
+    const time = Date.parse(`${day.on}T00:00:00Z`);
     return {
       on: day.on,
       value,
-      left: days.length === 1 ? 50 : 6 + index * 88 / (days.length - 1),
+      left: lastTime === firstTime ? 50 : 6 + (time - firstTime) * 88 / (lastTime - firstTime),
       top: value === null ? null : 16 + (maximum - value) * 62 / range,
-      minimum: day.on === minimumOn,
+      minimum: day.on === trendMinimum.value?.on && value === trendMinimum.value?.value,
       edge: index === 0 || index === days.length - 1,
     };
   });
+});
+const chartLabels = computed(() => {
+  const days = trendDaily.value;
+  if (!days.length) return [];
+  return [...new Set([days[0]!.on, days[Math.floor((days.length - 1) / 2)]!.on, days[days.length - 1]!.on])];
 });
 const chartSegments = computed(() => chartPoints.value.slice(0, -1).flatMap((point, index) => {
   const next = chartPoints.value[index + 1]!;
@@ -176,21 +167,16 @@ const chartSegments = computed(() => chartPoints.value.slice(0, -1).flatMap((poi
   }];
 }));
 const chartFacts = computed(() => {
-  const known = trendDaily.value.flatMap(day => day.projectedCashMinor === null
-    ? [] : [{ ...day, projectedCashMinor: day.projectedCashMinor }]);
-  if (!known.length) return [];
-  const minimum = known.find(day => !showingDemoTrend.value && day.on === rollingForecast.value?.minimumCashOn)
-    ?? known.reduce((lowest, day) => day.projectedCashMinor < lowest.projectedCashMinor ? day : lowest);
+  const minimum = trendMinimum.value;
+  if (!minimum) return [];
+  const complete = trendForecast.value?.status !== 'unknown'
+    && trendDaily.value.every(day => day.projectedCashMinor !== null);
+  const lastDay = trendDaily.value[trendDaily.value.length - 1];
   return [
-    { label: '当前', value: known[0]!.projectedCashMinor, on: known[0]!.on, tone: 'normal' },
-    { label: '最低', value: minimum.projectedCashMinor, on: minimum.on, tone: 'minimum' },
-    { label: '30 天后', value: known[known.length - 1]!.projectedCashMinor, on: known[known.length - 1]!.on, tone: 'normal' },
+    { label: complete ? '最低' : '已知最低', value: minimum.value, on: minimum.on, tone: 'minimum' },
+    ...(complete && lastDay?.projectedCashMinor !== null && lastDay?.projectedCashMinor !== undefined
+      ? [{ label: '预测期末', value: lastDay.projectedCashMinor, on: lastDay.on, tone: 'normal' }] : []),
   ];
-});
-const trendSummary = computed(() => {
-  if (!showingDemoTrend.value) return cashflowSummary.value;
-  const minimum = chartFacts.value.find(fact => fact.tone === 'minimum');
-  return minimum ? `预计最低余额 ${yuan(minimum.value)}，重点留意 ${shortDate(minimum.on)}。` : '未来余额走势暂待补全。';
 });
 const lowestDay = computed(() => rollingDaily.value.find(day => day.on === rollingForecast.value?.minimumCashOn) ?? null);
 const rollingHeadroom = computed(() => lowestDay.value?.savingsHeadroomMinor ?? null);
@@ -200,6 +186,17 @@ const rollingFoot = computed(() => {
   const worst = rollingForecast.value.minimumSavingsHeadroomMinor;
   if (worst !== null && worst < 0) return `30 天预计缺口 ${yuan(-worst)}`;
   return rollingHeadroom.value === null ? '最低日差额待确认' : `最低日缓冲 ${yuan(rollingHeadroom.value)}`;
+});
+const rollingMissingBasis = computed(() => {
+  const reasons = rollingForecast.value?.reasonCodes ?? [];
+  if (!reasons.length) return '当前没有缺失依据';
+  const labels: Record<string, string> = {
+    ADJACENT_PERIOD_UNKNOWN: '相邻月份计划未建立或未激活',
+    SNAPSHOT_STALE: '账户资金快照已过期',
+    FINANCE_BASIS_UNKNOWN: '当前现金依据不足',
+    PERIOD_FACTS_INCOMPLETE: '本月计划信息尚不完整',
+  };
+  return [...new Set(reasons.map(reason => labels[reason] ?? '其他资金依据待核对'))].join('、');
 });
 const accountState = computed(() => !overview.primaryAccount.value ? '等待选择'
   : overview.primaryAccount.value.cashBasis.dataStatus === 'observed' ? '资金已核验' : '资金待核验');
@@ -231,23 +228,40 @@ const cashflowSummary = computed(() => {
     ? `另有日期预计缺口 ${yuan(-forecast.minimumSavingsHeadroomMinor)}，需要调整安排。` : '';
   return `${shortDate(forecast.minimumCashOn)}最低日与保留目标差额 ${yuan(Math.abs(headroom))}${headroom < 0 ? '，需要调整安排' : '，仍有缓冲'}。${otherGap}`;
 });
+const trendSummary = computed(() => {
+  const forecast = trendForecast.value;
+  if (!forecast || forecast.minimumProjectedCashMinor === null || !forecast.minimumCashOn) {
+    return '资金信息还不完整，暂时无法展示完整走势。';
+  }
+  return forecast.minimumProjectedCashMinor < 0
+    ? `${shortDate(forecast.minimumCashOn)}可能出现 ${yuan(-forecast.minimumProjectedCashMinor)} 的资金缺口，建议提前调整此前的支出安排。`
+    : `预计最低余额为 ${yuan(forecast.minimumProjectedCashMinor)}，出现在 ${shortDate(forecast.minimumCashOn)}，可结合走势安排接下来的支出。`;
+});
 const timeline = computed(() => {
   const days = rollingDaily.value;
   if (!days.length) return [];
   const start = days[0]!.on;
   const end = days[days.length - 1]!.on;
   const accountId = overview.primaryAccount.value?.account.accountId;
+  const plannedEvents = new Map(days.flatMap(day => day.events
+    .filter(event => event.kind === 'planned_expense').map(event => [event.referenceId, event] as const)));
   const items = overview.periods.value.filter(period => period.period.accountId === accountId && period.period.status === 'active')
     .flatMap(period => period.items.filter(item => item.status === 'planned'
-      && item.plannedOn >= start && item.plannedOn <= end).map(item => ({
-        id: `item-${item.itemId}`, on: item.plannedOn, title: item.title,
-        kind: item.kind === 'expected_income' ? '预计收入' : item.kind === 'essential_expense' ? '必要支出' : '可调计划',
-        amountMinor: item.userEstimatedAmountMinor, included: item.kind !== 'expected_income',
-      })));
+      && item.plannedOn >= start && item.plannedOn <= end).map(item => {
+        const event = plannedEvents.get(item.itemId);
+        const income = item.kind === 'expected_income';
+        return {
+          id: `item-${item.itemId}`, on: item.plannedOn, title: item.title,
+          kind: income ? '预计收入' : item.kind === 'essential_expense' ? '必要支出' : '可调计划',
+          amountMinor: !income && event ? -event.deltaMinor : item.userEstimatedAmountMinor,
+          amountLabel: income ? '预计金额' : event ? '剩余安排' : '原计划金额（非预测扣款）',
+          included: !income && !!event,
+        };
+      }));
   const obligations = (overview.primaryAccount.value?.obligations.items ?? [])
     .filter(item => ['upcoming', 'overdue'].includes(item.status) && item.dueOn >= start && item.dueOn <= end)
     .map(item => ({ id: `obligation-${item.id}`, on: item.dueOn, title: item.label,
-      kind: '还款义务', amountMinor: item.remainingDueMinor ?? item.amountDueMinor,
+      kind: '还款义务', amountLabel: item.remainingDueMinor == null ? '原义务金额（剩余待核验）' : '剩余义务', amountMinor: item.remainingDueMinor ?? item.amountDueMinor,
       included: item.remainingDueMinor !== null && item.remainingDueMinor !== undefined }));
   return [...items, ...obligations].sort((a, b) => a.on.localeCompare(b.on) || a.id.localeCompare(b.id));
 });
@@ -266,7 +280,7 @@ const statusTone = (status: string) => status === 'allowed' ? 'success' : status
 
 const sheetCopy = computed(() => ({
   pending: { title: '需要你处理', description: '仅列出服务端已确认的待办与未来义务。', primary: '' },
-  impact: { title: '未来 30 天资金影响', description: '以下是当前资金依据的摘要，不代表未来余额保证。', primary: overview.currentPeriod.value ? '查看本月分析' : '' },
+  impact: { title: '未来 30 天预测依据', description: '这里解释走势的资金起点、已知日期和缺失依据；不代表未来余额保证。', primary: overview.currentPeriod.value ? '查看本月分析' : '' },
   obligation: { title: selectedObligation.value?.label ?? '未来义务', description: '这是尚未发生或尚未完全结清的资金安排。', primary: '' },
   plan: { title: selectedPlan.value?.title ?? '计划影响', description: '计划金额与资金结论分开展示，以服务端状态为准。', primary: '查看计划详情' },
   ledger: { title: categoryLabel(selectedLedger.value?.displayCategory ?? null), description: '这是一笔账户事实记录。', primary: '查看全部账目' },
@@ -281,6 +295,10 @@ function openPending(item: PendingAction) {
   if (item.url) void Taro.navigateTo({ url: item.url });
 }
 function switchTab(url: string) { void Taro.switchTab({ url }); }
+function openMonthlyAnalysis() {
+  const id = overview.currentPeriod.value?.period.periodId;
+  if (id) void Taro.navigateTo({ url: `/pages/impact/detail?periodId=${id}` });
+}
 function askAboutMinimum() {
   const period = overview.currentPeriod.value;
   if (!period) return;
@@ -295,7 +313,7 @@ function handleSheetPrimary() {
   activeSheet.value = null;
   if (sheet === 'ledger') return switchTab('/pages/ledger/index');
   if (sheet === 'plan' && selectedPlan.value && overview.currentPeriod.value) return Taro.navigateTo({ url: `/pages/item/detail?periodId=${overview.currentPeriod.value.period.periodId}&itemId=${selectedPlan.value.itemId}` });
-  if (sheet === 'impact' && overview.currentPeriod.value) return Taro.navigateTo({ url: `/pages/impact/detail?periodId=${overview.currentPeriod.value.period.periodId}` });
+  if (sheet === 'impact') return openMonthlyAnalysis();
 }
 function openAccount() {
   const id = overview.primaryAccount.value?.account.accountId;
@@ -319,10 +337,9 @@ function openAccount() {
         <view class="section-card summary-card summary-card--account" @tap="openAccount">
           <view class="summary-card__heading">
             <view class="summary-card__identity"><view class="summary-card__icon summary-card__icon--account" aria-hidden="true"><view class="account-icon__stripe"/><view class="account-icon__chip"/></view><text class="summary-card__label">我的主账户</text></view>
-            <button class="visibility-button" :aria-label="balanceVisible?'隐藏主账户金额':'显示主账户金额'" @tap.stop="toggleBalanceVisibility">{{ balanceVisible ? '隐藏' : '显示' }}</button>
           </view>
           <text class="summary-card__meta">{{ overview.primaryAccount.value?.account.displayName ?? '尚未选择账户' }}</text>
-          <text class="summary-card__amount amount">{{ !overview.primaryAccount.value?'—':balanceVisible ? yuan(overview.primaryAccount.value.cashBasis.confirmedCashMinor) : '••••' }}</text>
+          <view class="summary-card__amount-row"><text class="summary-card__amount amount">{{ !overview.primaryAccount.value?'—':balanceVisible ? yuan(overview.primaryAccount.value.cashBasis.confirmedCashMinor) : '••••' }}</text><button class="visibility-button" :aria-label="balanceVisible?'隐藏主账户金额':'显示主账户金额'" @tap.stop="toggleBalanceVisibility">{{ balanceVisible ? '隐藏' : '显示' }}</button></view>
           <view class="summary-card__footer"><text class="summary-card__state"><text class="summary-card__dot"/>{{ accountState }}</text><text class="summary-card__arrow">›</text></view>
           <text class="summary-card__foot">{{ factTime }}</text>
         </view>
@@ -332,28 +349,28 @@ function openAccount() {
             <text class="summary-card__arrow">›</text>
           </view>
           <text class="summary-card__meta">预计最低余额</text>
-          <text class="summary-card__amount amount" :class="{'summary-card__amount--state':forecastAmount==='计算中'||forecastAmount==='待补全'}">{{ forecastAmount }}</text>
+          <view class="summary-card__amount-row"><text class="summary-card__amount amount" :class="{'summary-card__amount--state':forecastAmount==='计算中'||forecastAmount==='待补全'}">{{ forecastAmount }}</text></view>
           <view class="summary-card__footer"><text class="summary-card__state"><text class="summary-card__dot"/>{{ forecastState }}</text></view>
           <text class="summary-card__foot">{{ forecastFoot }}</text>
         </view>
       </view>
       <button v-if="attention.length" class="urgent-brief" @tap="activeSheet='pending'"><view><text>有 {{ pendingActions.length }} 项需要留意</text><text>{{ attention[0]?.title }} · {{ attention[0]?.detail }}</text></view><text aria-hidden="true">›</text></button>
       <view v-if="rollingError" class="notice notice--warning forecast-error">30 天预测暂时不可用：{{ rollingError }}</view>
-      <SectionHeader title="未来资金走势" :action="overview.currentPeriod.value ? '查看本月分析' : undefined" @action="activeSheet='impact'" />
-      <SectionCard v-if="trendDaily.length" class="forecast-card">
-        <view class="forecast-card__lead"><view><text class="forecast-card__eyebrow">未来 30 天</text><text class="forecast-card__summary">{{ trendSummary }}</text></view><text class="forecast-card__status">{{ showingDemoTrend ? '余额趋势' : forecastState }}</text></view>
+      <SectionHeader title="未来资金走势" :action="overview.currentPeriod.value ? '查看本月分析' : undefined" @action="openMonthlyAnalysis" />
+      <SectionCard v-if="rollingDaily.length" class="forecast-card">
+        <view class="forecast-card__lead"><view class="forecast-card__topline"><text class="forecast-card__eyebrow">未来 30 天</text><text class="forecast-card__status">{{ forecastState }}</text></view><text class="forecast-card__summary">{{ trendSummary }}</text></view>
         <view v-if="chartFacts.length" class="trend-facts">
           <view v-for="fact in chartFacts" :key="fact.label" class="trend-fact" :class="{'trend-fact--minimum':fact.tone==='minimum'}"><text>{{ fact.label }}</text><text class="amount">{{ yuan(fact.value) }}</text><text>{{ shortDate(fact.on) }}</text></view>
         </view>
         <view v-if="chartPoints.length" class="trend-chart" aria-label="未来资金折线图">
           <view class="trend-chart__grid trend-chart__grid--top"/><view class="trend-chart__grid trend-chart__grid--middle"/><view class="trend-chart__grid trend-chart__grid--bottom"/>
           <view v-for="(segment,index) in chartSegments" :key="`line-${index}`" class="trend-chart__line" :style="`left:${segment.left}%;top:${segment.top}%;width:${segment.width}%;transform:rotate(${segment.angle}deg)`"/>
-          <view v-for="point in chartPoints" v-show="point.top!==null" :key="point.on" class="trend-chart__point" :class="{'trend-chart__point--minimum':point.minimum,'trend-chart__point--edge':point.edge}" :style="`left:${point.left}%;top:${point.top??0}%`"><text v-if="point.minimum">最低 {{ yuan(point.value) }}</text></view>
-          <view class="trend-chart__labels"><text v-for="point in chartPoints" :key="point.on">{{ shortDate(point.on) }}</text></view>
+          <view v-for="point in chartPoints" v-show="point.top!==null" :key="point.on" class="trend-chart__point" :class="{'trend-chart__point--minimum':point.minimum,'trend-chart__point--edge':point.edge}" :style="`left:${point.left}%;top:${point.top??0}%`"><text v-if="point.minimum">{{ trendForecast?.status === 'unknown' ? '已知最低' : '最低' }} {{ yuan(point.value) }}</text></view>
+          <view class="trend-chart__labels"><text v-for="on in chartLabels" :key="on">{{ shortDate(on) }}</text></view>
         </view>
-        <text v-else class="trend-chart__empty">已登记日期不足，暂时无法绘制走势。</text>
-        <text v-if="!showingDemoTrend" class="forecast-card__note">仅依据已确认资金与已登记安排测算，预计收入不会提前计入。</text>
-        <button v-if="!showingDemoTrend" class="text-action" @tap="activeSheet='impact'">查看 30 天完整分析 ›</button>
+        <text v-else class="trend-chart__empty">可核对的逐日余额不足，暂时无法绘制走势。</text>
+        <text class="forecast-card__note">走势供安排参考，实际可用余额以到账记录为准。</text>
+        <button class="text-action" @tap="activeSheet='impact'">查看预测依据 ›</button>
       </SectionCard>
       <StatePanel v-else :title="rollingLoading?'正在计算逐日资金':'暂无完整 30 天预测'" :detail="overview.currentPeriod.value?'资金依据或相邻月份规划尚未齐全。':'先建立并激活本月计划，才能查看未来走势。'" />
       <SectionCard v-if="rollingForecast?.minimumCashOn" class="minimum-card">
@@ -367,7 +384,7 @@ function openAccount() {
       <SectionCard v-if="visibleTimeline.length" class="timeline-card">
         <view v-for="item in visibleTimeline" :key="item.id" class="timeline-row">
           <text class="timeline-row__date">{{ shortDate(item.on) }}</text>
-          <view class="timeline-row__copy"><text>{{ item.title }}</text><text>{{ item.kind }} · {{ !item.included?'未计入预测现金':rollingForecast?.status==='unknown'?'预测待核验':'已纳入预测' }}</text></view>
+          <view class="timeline-row__copy"><text>{{ item.title }}</text><text>{{ item.kind }} · {{ item.amountLabel }}<template v-if="item.included"> · {{ rollingForecast?.status==='unknown'?'预测待核验':'已纳入保守预测' }}</template><template v-else-if="item.kind==='预计收入'"> · {{ hasIncomeScenario?'仅计入条件走势':'未计入预测现金' }}</template></text></view>
           <text class="timeline-row__amount amount">{{ yuan(item.amountMinor) }}</text>
         </view>
         <button v-if="timeline.length>5" class="text-action" @tap="expandedTimeline=!expandedTimeline">{{ expandedTimeline?'收起安排':`查看全部 ${timeline.length} 项` }}</button>
@@ -381,7 +398,7 @@ function openAccount() {
       <view v-if="pendingError" class="notice notice--warning pending-error">部分待办暂时未能同步：{{pendingError}}</view>
       <SectionHeader title="近期计划" action="查看全部" @action="switchTab('/pages/plan/index')" />
       <view v-if="planItems.length" class="plan-grid">
-        <SectionCard v-for="item in planItems" :key="item.itemId" class="plan-card" @tap="showPlan(item)"><text class="plan-card__date">{{ shortDate(item.plannedOn) }}</text><text class="plan-card__title">{{ item.title }}</text><text class="plan-card__amount amount">{{ yuan(item.userEstimatedAmountMinor) }}</text><StatusBadge :label="`周期整体：${fundingLabel(forecastStatus)}`" :tone="statusTone(forecastStatus)" /></SectionCard>
+        <SectionCard v-for="item in planItems" :key="item.itemId" class="plan-card" @tap="showPlan(item)"><text class="plan-card__date">{{ shortDate(item.plannedOn) }}</text><text class="plan-card__title">{{ item.title }}</text><text class="plan-card__amount amount">{{ yuan(item.userEstimatedAmountMinor) }}</text><StatusBadge :label="forecastStatus==='needs_adjustment'?'周期需调整':fundingLabel(forecastStatus)" :tone="statusTone(forecastStatus)" /></SectionCard>
       </view>
       <StatePanel v-else title="还没有近期计划" detail="可以从计划页建立草稿，或直接问问行止。" />
       <SectionHeader title="最近账目" action="查看全部" @action="switchTab('/pages/ledger/index')" />
@@ -397,7 +414,7 @@ function openAccount() {
       <view v-if="pendingActions.length" class="sheet-list"><view v-for="item in pendingActions" :key="item.id" class="sheet-list__item" @tap="openPending(item)"><view><text>{{ item.title }}</text><text>{{item.detail}}</text></view><text v-if="item.amountMinor!==undefined" class="amount">{{ yuan(item.amountMinor) }}</text></view></view>
       <StatePanel v-else title="暂时没有待处理事项" detail="出现需要确认的变化时，会在这里提醒你。" />
     </template>
-    <template v-else-if="activeSheet==='impact'"><FactRow label="未来 30 天预计最低余额" :value="yuan(rollingForecast?.minimumProjectedCashMinor)" emphasis/><FactRow label="本月保留目标" :value="yuan(overview.currentPeriod.value?.basis.savingsTargetMinor)"/><FactRow label="最低日与当日目标差额" :value="yuan(rollingHeadroom)"/><FactRow label="30 天最低缓冲" :value="yuan(rollingForecast?.minimumSavingsHeadroomMinor)"/><FactRow label="关键日期" :value="shortDate(rollingForecast?.minimumCashOn)"/><FactRow label="30 天结论" :value="rollingForecast?fundingLabel(rollingForecast.status):'依据不足'"/><view class="sheet-note">{{cashflowSummary}} 跨月时保留目标以当日规划为准；预计收入与待核退款不提前计入现金。缺相邻月规划时后续日期显示未知。</view></template>
+    <template v-else-if="activeSheet==='impact'"><FactRow label="资金起点时间" :value="rolling?.asOf?`${shortDate(rolling.asOf)} ${clockTime(rolling.asOf)}`:'待核验'"/><FactRow label="可计算日期" :value="`${rollingDaily.filter(day=>day.projectedCashMinor!==null).length} / ${rollingDaily.length} 天`"/><FactRow label="未完成依据" :value="rollingMissingBasis"/><FactRow label="保守预计最低余额" :value="yuan(rollingForecast?.minimumProjectedCashMinor)" emphasis/><FactRow v-if="hasIncomeScenario" label="含预计收入情景最低" :value="yuan(trendForecast?.minimumProjectedCashMinor)"/><FactRow label="本月保留目标" :value="yuan(overview.currentPeriod.value?.basis.savingsTargetMinor)"/><FactRow label="最低日与当日目标差额" :value="yuan(rollingHeadroom)"/><FactRow label="30 天最低缓冲" :value="yuan(rollingForecast?.minimumSavingsHeadroomMinor)"/><FactRow label="关键日期" :value="shortDate(rollingForecast?.minimumCashOn)"/><FactRow label="30 天结论" :value="rollingForecast?fundingLabel(rollingForecast.status):'依据不足'"/><view class="sheet-note">{{cashflowSummary}} 跨月时保留目标以当日规划为准；预计收入只在条件走势中展示，不提前用于支付或资金评估。缺相邻月规划时后续日期显示未知。</view></template>
     <template v-else-if="activeSheet==='obligation' && selectedObligation"><FactRow label="待处理金额" :value="yuan(selectedObligation.remainingDueMinor??selectedObligation.amountDueMinor)" emphasis/><FactRow label="预计日期" :value="shortDate(selectedObligation.dueOn)"/><FactRow label="当前状态" :value="selectedObligation.status==='overdue'?'已逾期':'尚未发生'"/><view class="sheet-note">未来义务与已入账支出分开显示，不会提前记到账目中。</view></template>
     <template v-else-if="activeSheet==='plan' && selectedPlan"><FactRow label="原计划估价" :value="yuan(selectedPlan.userEstimatedAmountMinor)" emphasis/><FactRow label="计划日期" :value="shortDate(selectedPlan.plannedOn)"/><FactRow label="预计最低余额" :value="yuan(overview.currentPeriod.value?.basis.minimumProjectedCashMinor)"/><FactRow label="周期整体状态" :value="fundingLabel(forecastStatus)"/></template>
     <template v-else-if="activeSheet==='ledger' && selectedLedger"><view class="ledger-detail-amount amount" :class="{'ledger-detail-amount--in':selectedLedger.direction==='inflow'}">{{ selectedLedger.direction==='inflow'?'+':'-' }}{{ yuan(selectedLedger.amountMinor) }}</view><FactRow label="状态" :value="selectedLedger.status==='posted'?'已入账':selectedLedger.status==='reversed'?'已冲正':'处理中'"/><FactRow label="分类" :value="categoryLabel(selectedLedger.displayCategory)"/><FactRow label="发生时间" :value="shortDate(selectedLedger.occurredAt)"/><FactRow label="账户" :value="overview.primaryAccount.value?.account.displayName??'—'"/></template>
@@ -408,10 +425,10 @@ function openAccount() {
 @use '../../styles/tokens' as *;
 .retry{margin:24px auto 0}.pending-button{position:relative;display:flex;width:88px;height:88px;align-items:center;justify-content:center;padding:0;color:$brand-deep;background:rgba(255,255,255,.72);border:1px solid rgba(38,125,98,.1);border-radius:50%}.pending-button__bell{font-size:36px;line-height:1}.pending-button__count{position:absolute;right:-4px;top:-4px;display:flex;min-width:30px;height:30px;align-items:center;justify-content:center;padding:0 7px;color:#fff;background:$danger;border:3px solid #EDF3EF;border-radius:999px;font-size:18px;line-height:1}
 .summary-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:14px}.summary-card{position:relative;display:flex;min-width:0;min-height:272px;flex-direction:column;overflow:hidden}.summary-card::after{position:absolute;right:-46px;bottom:-54px;width:150px;height:150px;border:24px solid rgba(47,111,90,.035);border-radius:50%;content:'';pointer-events:none}.summary-card--forecast{background:linear-gradient(155deg,#FFFFFF 0%,#F5FAF7 100%)}.summary-card__heading{position:relative;z-index:1;display:flex;min-width:0;align-items:center;justify-content:space-between;gap:10px}.summary-card__identity{display:flex;min-width:0;align-items:center;gap:13px}.summary-card__icon{position:relative;display:flex;flex:0 0 50px;width:50px;height:50px;align-items:center;justify-content:center;color:$brand-primary;background:$surface-tint;border:1px solid rgba(47,111,90,.08);border-radius:15px}.summary-card__icon--account::before{width:27px;height:19px;border:3px solid currentColor;border-radius:5px;content:''}.account-icon__stripe{position:absolute;left:12px;top:20px;width:26px;height:3px;background:currentColor}.account-icon__chip{position:absolute;right:13px;bottom:13px;width:7px;height:5px;background:currentColor;border-radius:2px}.summary-card__icon--forecast{align-items:flex-end;gap:3px;padding-bottom:11px}.forecast-icon__bar{width:5px;background:currentColor;border-radius:4px 4px 1px 1px}.forecast-icon__bar--one{height:9px}.forecast-icon__bar--two{height:15px}.forecast-icon__bar--three{height:23px}.forecast-icon__line{position:absolute;left:11px;top:15px;width:28px;height:13px;border-top:3px solid currentColor;transform:rotate(-20deg)}.summary-card__eyebrow,.summary-card__label,.summary-card__meta,.summary-card__amount,.summary-card__foot{display:block}.summary-card__eyebrow{margin-bottom:2px;color:$text-tertiary;font-size:17px;line-height:1.2}.summary-card__label{min-width:0;font-size:25px;font-weight:720;line-height:1.3;white-space:nowrap}.summary-card__meta{position:relative;z-index:1;margin-top:20px;color:$text-secondary;font-size:20px;line-height:1.35}.summary-card__amount{position:relative;z-index:1;margin-top:7px;font-size:40px;font-weight:760;line-height:1.2;white-space:nowrap}.summary-card__amount--state{font-size:30px;letter-spacing:.02em}.summary-card__footer{position:relative;z-index:1;display:flex;align-items:center;justify-content:space-between;margin-top:auto;padding-top:17px}.summary-card__state{display:inline-flex;align-items:center;padding:7px 10px;color:$brand-deep;background:rgba(232,240,236,.92);border-radius:999px;font-size:17px;line-height:1.2}.summary-card__dot{width:7px;height:7px;margin-right:7px;background:$brand-primary;border-radius:50%}.summary-card__arrow{color:$brand-primary;font-size:34px;line-height:1}.summary-card__foot{position:relative;z-index:1;margin-top:10px;color:$text-tertiary;font-size:18px;line-height:1.35}.visibility-button{display:inline-flex;flex:0 0 auto;width:auto;align-items:center;justify-content:center;padding:7px 10px;color:$text-tertiary;background:$soft-surface;border-radius:999px;font-size:17px;line-height:1.2;white-space:nowrap}
-.forecast-error{margin-top:14px}.forecast-card__lead{display:flex;align-items:flex-start;justify-content:space-between;gap:24px}.forecast-card__lead>view{flex:1;min-width:0}.forecast-card__eyebrow,.forecast-card__summary,.forecast-card__note,.minimum-card__title,.minimum-card__note{display:block}.forecast-card__eyebrow{margin-bottom:8px;color:$brand-primary;font-size:$type-meta;font-weight:$font-weight-semibold}.forecast-card__summary{font-size:$type-item-title;font-weight:$font-weight-semibold;line-height:1.55}.forecast-card__status{flex:0 0 auto;padding:8px 12px;color:$brand-deep;background:$surface-tint;border-radius:999px;font-size:$type-meta;font-weight:$font-weight-medium}.forecast-card__note,.minimum-card__note{margin-top:16px;color:$text-secondary;font-size:$type-label;line-height:1.55}.trend-facts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-top:28px}.trend-fact{min-width:0;padding:16px;background:$soft-surface;border-radius:18px}.trend-fact text{display:block;color:$text-tertiary;font-size:$type-meta;line-height:1.35}.trend-fact .amount{margin:5px 0;color:$text-primary;font-size:$type-label;font-weight:$font-weight-semibold;white-space:nowrap}.trend-fact--minimum{background:$warning-surface}.trend-fact--minimum text:first-child,.trend-fact--minimum .amount{color:$warning}.daily-list{margin-top:20px;border-top:1px solid $border}.daily-row{display:flex;justify-content:space-between;gap:16px;padding:13px 0;border-bottom:1px solid $border;font-size:26px}.daily-row text:last-child{font-weight:650}.daily-row--minimum{color:$brand-deep}.daily-row--unknown{color:$text-tertiary;border-bottom-style:dashed}.daily-row--unknown text:last-child{font-weight:400}.text-action{width:100%;margin-top:14px;padding:12px;color:$brand-primary;background:transparent;font-size:25px}.minimum-card{margin-top:14px;background:$soft-surface}.minimum-card__title{font-size:27px;font-weight:700}.cause-list{display:grid;gap:7px;margin-top:10px;color:$text-secondary;font-size:25px}.timeline-card{padding-block:8px}.timeline-row{display:flex;align-items:flex-start;gap:14px;padding:17px 0}.timeline-row+.timeline-row{border-top:1px solid $border}.timeline-row__date{flex:0 0 96px;color:$text-secondary;font-size:24px}.timeline-row__copy{flex:1;min-width:0}.timeline-row__copy text{display:block;font-size:26px;line-height:1.35}.timeline-row__copy text+text{margin-top:5px;color:$text-tertiary;font-size:23px}.timeline-row__amount{font-size:25px;font-weight:680;white-space:nowrap}
+.forecast-error{margin-top:14px}.forecast-card__lead{display:block}.forecast-card__topline{display:flex;align-items:center;justify-content:space-between;gap:16px}.forecast-card__eyebrow,.forecast-card__summary,.forecast-card__note,.minimum-card__title,.minimum-card__note{display:block}.forecast-card__eyebrow{margin-bottom:0;color:$brand-primary;font-size:$type-meta;font-weight:$font-weight-semibold}.forecast-card__summary{margin-top:12px;text-align:justify;text-align-last:left;font-size:$type-item-title;font-weight:$font-weight-semibold;line-height:1.55}.forecast-card__status{flex:0 0 auto;padding:8px 12px;color:$brand-deep;background:$surface-tint;border-radius:999px;font-size:$type-meta;font-weight:$font-weight-medium}.forecast-card__note,.minimum-card__note{margin-top:16px;color:$text-secondary;font-size:$type-label;line-height:1.55}.trend-facts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-top:28px}.trend-fact{min-width:0;padding:16px;background:$soft-surface;border-radius:18px}.trend-fact text{display:block;color:$text-tertiary;font-size:$type-meta;line-height:1.35}.trend-fact .amount{margin:5px 0;color:$text-primary;font-size:$type-label;font-weight:$font-weight-semibold;white-space:nowrap}.trend-fact--minimum{background:$warning-surface}.trend-fact--minimum text:first-child,.trend-fact--minimum .amount{color:$warning}.daily-list{margin-top:20px;border-top:1px solid $border}.daily-row{display:flex;justify-content:space-between;gap:16px;padding:13px 0;border-bottom:1px solid $border;font-size:26px}.daily-row text:last-child{font-weight:650}.daily-row--minimum{color:$brand-deep}.daily-row--unknown{color:$text-tertiary;border-bottom-style:dashed}.daily-row--unknown text:last-child{font-weight:400}.text-action{width:100%;margin-top:14px;padding:12px;color:$brand-primary;background:transparent;font-size:25px}.minimum-card{margin-top:14px;background:$soft-surface}.minimum-card__title{font-size:27px;font-weight:700}.cause-list{display:grid;gap:7px;margin-top:10px;color:$text-secondary;font-size:25px}.timeline-card{padding-block:8px}.timeline-row{display:flex;align-items:flex-start;gap:14px;padding:17px 0}.timeline-row+.timeline-row{border-top:1px solid $border}.timeline-row__date{flex:0 0 96px;color:$text-secondary;font-size:24px}.timeline-row__copy{flex:1;min-width:0}.timeline-row__copy text{display:block;font-size:26px;line-height:1.35}.timeline-row__copy text+text{margin-top:5px;color:$text-tertiary;font-size:23px}.timeline-row__amount{font-size:25px;font-weight:680;white-space:nowrap}
 .ai-entry{display:flex;align-items:center;gap:20px;margin-top:16px;padding:20px 24px;background:rgba(255,255,255,.72);border:1px solid rgba(255,255,255,.85);border-radius:20px;box-shadow:$shadow-card}.ai-entry__copy{flex:1}.ai-entry__copy text{display:block;font-size:30px;font-weight:650}.ai-entry__copy text+text{margin-top:6px;color:$text-secondary;font-size:25px;font-weight:400}.ai-entry__arrow{color:$brand-primary;font-size:42px}
 .attention-list{overflow:hidden;background:#FFFBF4;border:1px solid #EAD3B0;border-radius:20px}.attention-row{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:24px}.attention-row+.attention-row{border-top:1px solid #F0DFC4}.attention-row text{display:block}.attention-row__title{font-size:29px;font-weight:650}.attention-row__detail{margin-top:7px;color:$text-secondary;font-size:24px}.attention-row__amount{display:flex;align-items:center;gap:10px;color:$text-secondary}.attention-row__amount .amount{color:$text-primary;font-weight:650}
-.plan-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:14px}.plan-card{display:flex;min-width:0;flex-direction:column}.plan-card text{display:block}.plan-card__date{color:$text-secondary;font-size:25px;line-height:1.3}.plan-card__title{display:-webkit-box;min-height:2.6em;margin-top:8px;overflow:hidden;font-size:30px;font-weight:680;line-height:1.3;-webkit-box-orient:vertical;-webkit-line-clamp:2}.plan-card__amount{margin:16px 0;font-size:34px;font-weight:720;line-height:1.2;white-space:nowrap}.plan-card .status-badge{align-self:flex-start;margin-top:auto}
+.plan-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:14px}.plan-card{display:flex;min-width:0;flex-direction:column}.plan-card text{display:block}.plan-card__date{color:$text-secondary;font-size:25px;line-height:1.3}.plan-card__title{display:-webkit-box;margin-top:8px;overflow:hidden;font-size:30px;font-weight:680;line-height:1.3;-webkit-box-orient:vertical;-webkit-line-clamp:2}.plan-card__amount{margin:12px 0;font-size:34px;font-weight:720;line-height:1.2;white-space:nowrap}.plan-card .status-badge{align-self:flex-start;white-space:nowrap}
 .ledger-card{padding-block:8px}.ledger-row{display:flex;align-items:center;justify-content:space-between;padding:20px 4px}.ledger-row+.ledger-row{border-top:1px solid $border}.ledger-row text{display:block}.ledger-row__name{font-size:29px;font-weight:600}.ledger-row__time{margin-top:5px;color:$text-tertiary;font-size:24px}.ledger-row__end{display:flex;align-items:center;gap:12px}.ledger-row__amount{font-weight:680}.ledger-row__amount--in,.ledger-detail-amount--in{color:$success}.ledger-row__arrow{color:$text-tertiary;font-size:32px}
 .pending-error{margin-top:14px}.sheet-list{overflow:hidden;border:1px solid $border;border-radius:18px}.sheet-list__item{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:20px}.sheet-list__item+.sheet-list__item{border-top:1px solid $border}.sheet-list__item text{display:block}.sheet-list__item view text:first-child{font-size:28px;font-weight:620}.sheet-list__item view text+text{margin-top:6px;color:$text-secondary;font-size:24px}.sheet-list__item>.amount{font-weight:680}.sheet-note{margin-top:22px;padding:18px 20px;color:$text-secondary;background:$soft-surface;border-radius:16px;font-size:25px;line-height:1.55}.ledger-detail-amount{margin-bottom:20px;font-size:44px;font-weight:760}
 .trend-chart{position:relative;height:250px;margin-top:20px;overflow:hidden;background:linear-gradient(180deg,rgba(232,240,236,.58),rgba(255,255,255,0));border-radius:22px}.trend-chart__grid{position:absolute;left:6%;right:6%;height:1px;background:rgba(47,111,90,.1)}.trend-chart__grid--top{top:16%}.trend-chart__grid--middle{top:47%}.trend-chart__grid--bottom{top:78%}.trend-chart__line{position:absolute;z-index:2;height:5px;background:linear-gradient(90deg,$brand-primary,#69A991);border-radius:999px;transform-origin:left center}.trend-chart__point{position:absolute;z-index:3;width:12px;height:12px;background:$card;border:4px solid rgba(38,125,98,.5);border-radius:50%;transform:translate(-50%,-50%)}.trend-chart__point--edge{border-color:$brand-primary}.trend-chart__point--minimum{width:18px;height:18px;background:$warning-surface;border:5px solid $warning}.trend-chart__point text{position:absolute;left:50%;top:-43px;padding:5px 10px;color:$warning;background:$warning-surface;border-radius:999px;font-size:$type-meta;font-weight:$font-weight-semibold;white-space:nowrap;transform:translateX(-50%)}.trend-chart__labels{position:absolute;left:4%;right:4%;bottom:10px;display:flex;justify-content:space-between;color:$text-tertiary;font-size:$type-meta}.trend-chart__empty{display:block;margin-top:20px;color:$text-secondary;font-size:$type-label}
@@ -419,9 +436,9 @@ function openAccount() {
 .trend-chart{width:100%;height:auto;aspect-ratio:2.4/1}
 
 /* 两张首页核心卡片用原生 view 渲染，避免真机自定义组件节点丢失。 */
-.summary-grid{display:flex;width:100%;align-items:stretch;gap:24px}.summary-card.section-card{flex:1 1 0;min-width:0;min-height:336px;padding:28px;border:1px solid $border;border-radius:$radius-card;box-shadow:none}.summary-card--account{background:$surface-tint}.summary-card--forecast{background:linear-gradient(155deg,$card 0%,$accent-blue 145%)}.summary-card__identity{gap:16px}.summary-card__label{font-size:$type-item-title;font-weight:$font-weight-semibold;line-height:1.45;white-space:normal}.summary-card__meta{margin-top:20px;color:$text-secondary;font-size:$type-label;font-weight:$font-weight-regular;line-height:1.5}.summary-card__amount{margin-top:8px;font-size:$type-amount-card;font-weight:$font-weight-bold;line-height:1.2;letter-spacing:-.02em;white-space:normal;overflow-wrap:anywhere}.summary-card__amount--state{font-size:$type-amount-inline;letter-spacing:0}.summary-card__state{min-height:48px;padding:8px 12px;font-size:$type-meta;font-weight:$font-weight-medium;line-height:1.45}.summary-card__foot{font-size:$type-meta;font-weight:$font-weight-regular;line-height:1.45}.visibility-button{min-width:76px;min-height:64px;padding:8px 10px;color:$brand-primary;background:rgba(255,255,255,.72);font-size:24px}
+.summary-grid{display:flex;width:100%;align-items:stretch;gap:16px}.summary-card.section-card{display:grid;flex:1 1 0;min-width:0;min-height:380px;grid-template-rows:64px 52px 72px minmax(12px,1fr) 52px 80px;padding:24px;border:1px solid $border;border-radius:$radius-card;box-shadow:none}.summary-card--account{background:$surface-tint}.summary-card--forecast{background:linear-gradient(155deg,$card 0%,$accent-blue 145%)}.summary-card__identity{display:flex;gap:12px}.summary-card__label{font-size:30px;font-weight:$font-weight-semibold;line-height:1.3;white-space:nowrap}.summary-card__meta{margin-top:12px;color:$text-secondary;font-size:24px;font-weight:$font-weight-regular;line-height:1.4;letter-spacing:-.02em;white-space:nowrap}.summary-card__amount-row{position:relative;z-index:1;display:flex;min-width:0;align-items:center;gap:6px}.summary-card__amount{min-width:0;margin-top:0;font-size:$type-amount-card;font-weight:$font-weight-bold;line-height:1.2;letter-spacing:-.02em;white-space:nowrap}.summary-card__amount--state{font-size:$type-amount-inline;letter-spacing:0}.summary-card__footer{grid-row:5;align-self:center;margin-top:0;padding-top:0}.summary-card__state{min-height:48px;padding:8px 12px;font-size:$type-meta;font-weight:$font-weight-medium;line-height:1.45}.summary-card__foot{grid-row:6;min-width:0;margin-top:0;font-size:$type-meta;font-weight:$font-weight-regular;line-height:1.45;text-align:justify;text-align-last:left;overflow-wrap:anywhere}.visibility-button{flex:0 0 auto;min-width:0;min-height:44px;padding:5px 8px;color:$brand-primary;background:rgba(255,255,255,.72);font-size:18px;line-height:1.2}
 .urgent-brief{display:flex;width:100%;min-height:88px;align-items:center;justify-content:space-between;gap:20px;margin-top:24px;padding:16px 24px;color:$warning;background:$warning-surface;border:1px solid rgba(133,80,26,.16);border-radius:24px;text-align:left}.urgent-brief view{flex:1;min-width:0}.urgent-brief text{display:block;font-size:28px;line-height:1.45}.urgent-brief view text:first-child{font-weight:600}.urgent-brief view text+text{margin-top:4px;color:$text-secondary;font-size:26px}.urgent-brief>text{flex:0 0 auto;font-size:40px}
 .forecast-card{border-radius:$radius-card}.text-action{min-height:88px;font-size:28px}.minimum-card{margin-top:24px;border-radius:$radius-card}.minimum-card__title{font-size:32px}.cause-list{font-size:28px}
 .ai-entry{gap:24px;margin-top:24px;padding:24px 28px;background:$surface-tint;border:1px solid rgba(38,125,98,.12);border-radius:$radius-card;box-shadow:none}.ai-entry__copy text{font-size:32px;font-weight:600}.ai-entry__copy text+text{font-size:28px}.attention-list,.ledger-card,.sheet-list{border-radius:$radius-card}.attention-row{padding:28px 32px}.attention-row__title,.ledger-row__name{font-size:32px}.attention-row__detail,.ledger-row__time{font-size:28px}.plan-grid{gap:24px}.plan-card__title{font-size:32px}.plan-card__amount{font-size:36px}.ledger-row{min-height:128px;padding:24px 4px}.ledger-row__amount{font-size:36px}.sheet-note{font-size:28px}.ledger-detail-amount{font-size:64px}
-@media screen and (max-width:360px){.summary-grid{gap:20px}.summary-card.section-card{min-height:360px;padding:24px}.summary-card__identity{display:block}.summary-card__label{margin-top:10px;font-size:30px}.summary-card__amount{font-size:44px}.summary-card__amount--state{font-size:34px}.summary-card__foot{font-size:24px}.visibility-button{position:absolute;right:18px;top:18px}.forecast-card__lead{display:block}.forecast-card__status{display:inline-block;margin-top:12px}.trend-facts{gap:8px}.trend-fact{padding:12px 8px}.trend-fact .amount{font-size:24px}.plan-grid{grid-template-columns:1fr}.attention-row,.ledger-row,.sheet-list__item{align-items:flex-start}.attention-row__amount,.ledger-row__end{flex:0 0 auto}.plan-card__amount{white-space:normal}.timeline-row{flex-wrap:wrap}.timeline-row__date{flex-basis:82px}.ai-entry{gap:18px;padding:22px 24px}}
+@media screen and (max-width:360px){.summary-grid{gap:14px}.summary-card.section-card{min-height:380px;padding:20px}.summary-card__identity{gap:10px}.summary-card__label{font-size:28px}.summary-card__meta{font-size:22px}.summary-card__amount{font-size:42px}.summary-card__amount--state{font-size:34px}.summary-card__foot{font-size:22px}.visibility-button{min-height:40px;padding:4px 7px;font-size:17px}.forecast-card__lead{display:block}.trend-facts{gap:8px}.trend-fact{padding:12px 8px}.trend-fact .amount{font-size:24px}.plan-grid{grid-template-columns:1fr}.attention-row,.ledger-row,.sheet-list__item{align-items:flex-start}.attention-row__amount,.ledger-row__end{flex:0 0 auto}.plan-card__amount{white-space:normal}.timeline-row{flex-wrap:wrap}.timeline-row__date{flex-basis:82px}.ai-entry{gap:18px;padding:22px 24px}}
 </style>

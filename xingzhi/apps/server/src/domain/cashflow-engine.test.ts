@@ -87,3 +87,19 @@ test('A03 does not treat an unplanned next month as zero expense', () => {
   assert.equal(forecast.daily.find((day) => day.on === '2026-10-01')?.projectedCashMinor, null);
   assert.equal(forecast.daily.find((day) => day.on === '2026-10-14')?.projectedCashMinor, null);
 });
+
+test('Expected salary changes only the display scenario after its planned date', () => {
+  const input = { openingCashMinor: 20000, savingsTargetMinor: 0,
+    startOn: '2026-10-01', endOn: '2026-10-04',
+    events: [{ on: '2026-10-02', deltaMinor: -30000,
+      kind: 'planned_expense' as const, referenceId: 'rent' }] };
+  const conservative = calculateDailyCashflow(input);
+  const scenario = calculateDailyCashflow({ ...input, events: [...input.events,
+    { on: '2026-10-03', deltaMinor: 60000,
+      kind: 'expected_income' as const, referenceId: 'salary' }] });
+  assert.equal(conservative.status, 'blocked');
+  assert.equal(conservative.daily[1]?.projectedCashMinor, -10000);
+  assert.equal(scenario.daily[1]?.projectedCashMinor, -10000);
+  assert.equal(scenario.daily[2]?.projectedCashMinor, 50000);
+  assert.equal(scenario.minimumProjectedCashMinor, -10000);
+});

@@ -16,15 +16,15 @@ function evaluate(source, imports = {}, globals = {}) {
   return context.exports;
 }
 const format = evaluate(fs.readFileSync(path.join(root, 'lib/format.ts'), 'utf8'));
-function page(file, names, api, globals = {}, taroOverrides = {}) {
+function page(file, names, api, globals = {}, taroOverrides = {}, imports = {}) {
   const filename = path.join(root, file);
   const { descriptor } = parse(fs.readFileSync(filename, 'utf8'));
   assert.equal(compileTemplate({ source: descriptor.template.content, filename, id: 'test' }).errors.length, 0);
   let load;
   const result = evaluate(descriptor.scriptSetup.content + `\nexport { ${names.join(',')} };`, {
     vue: { ...vue, onBeforeUnmount: () => {} },
-    '@tarojs/taro': { default: { redirectTo: async () => {}, showModal: async () => ({ confirm: true }), ...taroOverrides }, useLoad: callback => { load = callback; } },
-    '@/lib/api': { api }, '@/lib/errors': { errorMessage: e => e.message ?? String(e) }, '@/lib/format': format,
+    '@tarojs/taro': { default: { redirectTo: async () => {}, showModal: async () => ({ confirm: true }), ...taroOverrides }, useDidShow: () => {}, useLoad: callback => { load = callback; } },
+    '@/lib/api': { api }, '@/lib/errors': { errorMessage: e => e.message ?? String(e) }, '@/lib/format': format, ...imports,
   }, globals);
   return { ...result, load };
 }
@@ -107,24 +107,28 @@ test('意外支出使用上海日期：凌晨及月初跨日，并拒绝过去�
       assessEmergency: () => { calls++; throw new Error('Past date must not submit'); },
     }, { Date: FixedDate });
     assert.equal(p.plannedOn.value, date);
-    p.period.value = { period: { monthStart: `${date.slice(0, 7)}-01`, monthEnd: `${date.slice(0, 7)}-31` } };
+    const monthEnd = new Date(Date.UTC(Number(date.slice(0, 4)), Number(date.slice(5, 7)), 0))
+      .toISOString().slice(0, 10);
+    p.period.value = { period: { monthStart: `${date.slice(0, 7)}-01`, monthEnd } };
     p.plannedOn.value = new FixedDate().toISOString().slice(0, 10);
     await p.assess(); assert.equal(calls, 0); assert.match(p.error.value, /今天或之后/);
   }
 });
 test('单项比较失败不丢弃已读取的周期依据', async () => {
-  const p = page('pages/impact/detail.vue', ['period', 'error', 'impactError'], {
+  const p = page('pages/impact/detail.vue', ['period', 'error', 'impactError', 'load as refresh'], {
     period: async () => ({ data: { period: { periodId: 'period' }, items: [{ itemId: 'item', status: 'planned' }] } }),
     budgetItemImpact: async () => { throw new Error('单项暂不可用'); },
   });
   await p.load({ periodId: 'period', itemId: 'item' });
+  await p.refresh();
   assert.equal(p.period.value.period.periodId, 'period'); assert.equal(p.error.value, ''); assert.equal(p.impactError.value, '单项暂不可用');
-  const stale = page('pages/impact/detail.vue', ['period', 'itemImpact', 'error', 'impactError'], {
+  const stale = page('pages/impact/detail.vue', ['period', 'itemImpact', 'error', 'impactError', 'load as refresh'], {
     period: async () => ({ data: { period: { periodId: 'period' },
       basis: { financialVersion: 3, periodVersion: 5 }, items: [{ itemId: 'item', status: 'planned' }] } }),
     budgetItemImpact: async () => ({ data: { financialVersion: 2, periodVersion: 5 } }),
   });
   await stale.load({ periodId: 'period', itemId: 'item' });
+  await stale.refresh();
   assert.equal(stale.period.value.period.periodId, 'period');
   assert.equal(stale.itemImpact.value, null);
   assert.equal(stale.error.value, '');
@@ -132,7 +136,7 @@ test('单项比较失败不丢弃已读取的周期依据', async () => {
 });
 
 test('单项影响沿用服务端剩余金额和比较结果，不在页面重复扣除已入账金额', async () => {
-  const p = page('pages/impact/detail.vue', ['period', 'itemImpact', 'itemHeadroomImpact', 'impactError'], {
+  const p = page('pages/impact/detail.vue', ['period', 'itemImpact', 'itemHeadroomImpact', 'impactError', 'load as refresh'], {
     period: async () => ({ data: {
       period: { periodId: 'period' }, basis: { financialVersion: 4, periodVersion: 7,
         confirmedCashMinor: 170000, minimumSavingsHeadroomMinor: 28000 },
@@ -144,6 +148,7 @@ test('单项影响沿用服务端剩余金额和比较结果，不在页面重�
       withoutItem: { minimumSavingsHeadroomMinor: 33000 } } }),
   });
   await p.load({ periodId: 'period', itemId: 'item' });
+  await p.refresh();
   assert.equal(p.impactError.value, '');
   assert.equal(p.itemImpact.value.coveredMinor, 3000);
   assert.equal(p.itemImpact.value.remainingMinor, 5000);
@@ -199,4 +204,51 @@ test('意外安排拒绝周期外日期，确认弹窗未完成前重复点击�
   assert.equal(modals.length, 2);
   assert.equal(sent[0].acceptedOptionId, 'A');
   assert.equal(p.saving.value, false);
+});
+
+
+test('待核验订单直接查单并刷新，失败可重试且不会重新交接付款', async () => {
+  const pending = deferred(); let checks = 0, reads = 0;
+  const p = page('pages/order/detail.vue', ['id', 'order', 'canRecheck', 'recheckPayment', 'saving', 'error'], {
+    paymentRecheck: async id => { assert.equal(id, 'order'); checks++; if (checks === 1) return pending.promise; },
+    order: async id => { assert.equal(id, 'order'); reads++; return { data: { environment: 'sandbox', paymentStatus: 'paid' } }; },
+    paymentHandoff: () => assert.fail('查单不得重新生成付款交接'),
+  });
+  p.id.value = 'order'; p.order.value = { environment: 'sandbox', paymentStatus: 'unknown' };
+  assert.equal(p.canRecheck.value, true);
+  const first = p.recheckPayment(); await p.recheckPayment(); assert.equal(checks, 1);
+  pending.reject(new Error('查单暂时失败')); await first;
+  assert.equal(p.saving.value, false); assert.match(p.error.value, /查单暂时失败/);
+  assert.equal(p.order.value.paymentStatus, 'unknown');
+  await p.recheckPayment(); assert.equal(checks, 2); assert.equal(reads, 1);
+  assert.equal(p.order.value.paymentStatus, 'paid'); assert.equal(p.canRecheck.value, false);
+  p.order.value = { environment: 'simulation', paymentStatus: 'unknown' };
+  await p.recheckPayment(); assert.equal(checks, 2);
+  const source = fs.readFileSync(path.join(root, 'pages/order/detail.vue'), 'utf8');
+  assert.match(source, /<button v-if="canRecheck"[^>]*@tap="recheckPayment"/);
+});
+
+
+test('周期详情按项目终态分组，归档不冒充完成，问行止携带项目上下文', async () => {
+  const questions = [], navigation = [];
+  const p = page('pages/period/detail.vue', ['id', 'period', 'itemGroup', 'askAboutItem', 'openImpact'], {}, {},
+    { navigateTo: options => navigation.push(options.url) },
+    { '@/lib/ai-entry': { openAiWithQuestion: value => questions.push(value) } });
+  p.id.value = 'period'; p.period.value = { period: { status: 'active' }, forecast: { status: 'allowed' } };
+  const item = { itemId: 'item', title: '游泳', plannedOn: '2026-09-29', status: 'settled' };
+  assert.equal(p.itemGroup(item), 'ended');
+  item.status = 'planned'; assert.equal(p.itemGroup(item), 'active');
+  p.period.value.forecast.status = 'unknown'; assert.equal(p.itemGroup(item), 'attention');
+  p.period.value.period.status = 'draft'; assert.equal(p.itemGroup(item), 'draft');
+  p.period.value.period.status = 'closed'; assert.equal(p.itemGroup(item), 'archived');
+  item.status = 'settled'; assert.equal(p.itemGroup(item), 'ended');
+  p.askAboutItem(item);
+  assert.equal(questions.length, 1); assert.equal(questions[0].periodId, 'period');
+  assert.equal(questions[0].itemId, 'item'); assert.equal(questions[0].on, '2026-09-29');
+  assert.match(questions[0].question, /游泳/);
+  p.openImpact('item'); assert.equal(navigation[0], '/pages/impact/detail?periodId=period&itemId=item');
+  const source = fs.readFileSync(path.join(root, 'pages/period/detail.vue'), 'utf8');
+  assert.match(source, /:group="itemGroup\(item\)"/);
+  assert.match(source, /@ask="askAboutItem\(item\)"/);
+  assert.match(source, /@impact="openImpact\(item.itemId\)"/);
 });

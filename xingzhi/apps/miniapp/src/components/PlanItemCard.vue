@@ -6,7 +6,7 @@ import { fundingLabel, shortDate, yuan } from '@/lib/format';
 
 const props = defineProps<{
   item: BudgetItem;
-  group: 'active' | 'attention' | 'draft' | 'ended';
+  group: 'active' | 'attention' | 'draft' | 'ended' | 'archived';
   forecastStatus: 'allowed' | 'needs_adjustment' | 'blocked' | 'unknown';
   supportingText: string;
 }>();
@@ -19,6 +19,8 @@ const iconKind = computed(() => props.item.kind === 'expected_income'
   : props.item.priority === 'required' ? 'required' : 'adjustable');
 const groupCopy = computed(() => props.group === 'ended'
   ? { label: props.item.status === 'cancelled' ? '已取消' : '已完成', tone: 'neutral' as const, action: '查看记录' }
+  : props.group === 'archived'
+  ? { label: '已归档', tone: 'neutral' as const, action: '查看记录' }
   : props.group === 'draft'
   ? { label: '草稿待完善', tone: 'neutral' as const, action: '继续完善' }
   : props.group === 'attention'
@@ -43,7 +45,7 @@ const groupCopy = computed(() => props.group === 'ended'
       </view>
       <view class="plan-item__actions">
         <button class="link-button" @tap.stop="openAction">{{ groupCopy.action }} ›</button>
-        <button v-if="group!=='ended'" class="link-button" @tap.stop="emit('ask')">问行止</button>
+        <button v-if="group!=='ended'&&group!=='archived'" class="link-button" @tap.stop="emit('ask')">问行止</button>
       </view>
     </view>
   </view>
